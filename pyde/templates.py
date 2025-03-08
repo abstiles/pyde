@@ -1,14 +1,17 @@
 """Handler for templated result files"""
 
-from pathlib import Path
-from typing import Callable
+from   pathlib                  import Path
+from   typing                   import Callable, Iterable
 
 import jinja2
-from jinja2 import Template as JinjaTemplate
-from jinja2 import BaseLoader
-from jinja2 import Environment, select_autoescape
+from   jinja2                   import (BaseLoader, Environment,
+                                        Template as JinjaTemplate,
+                                        select_autoescape)
+from   jinja2.ext               import Extension
+from   jinja2.lexer             import Token, TokenStream
 
-from .config import Config
+from   .config                  import Config
+from   .markdown                import markdownify
 
 
 class Template:
@@ -18,8 +21,16 @@ class Template:
             autoescape=select_autoescape(
                 enabled_extensions=(),
                 default_for_string=False,
-            )
+            ),
+            extensions=[JekyllTranslator, 'jinja2.ext.loopcontrols'],
         )
+        self.env.filters['markdownify'] = markdownify
+        self.env.filters['slugify'] = slugify
+        self.env.filters['append'] = lambda x, y: x + y
+        self.env.filters['plus'] = lambda x, y: x + y
+        self.env.filters['divided_by'] = lambda x, y: x / y
+        self.env.filters['absolute_url'] = lambda x: x
+        self.env.filters['relative_url'] = lambda x: x
 
     @classmethod
     def from_config(cls, config: Config) -> 'Template':
@@ -61,3 +72,63 @@ class TemplateLoader(BaseLoader):
             source = path.read_text()
             return source, str(path), lambda: mtime == path.stat().st_mtime
         return '{{ content }}', "", lambda: True
+
+
+class JekyllTranslator(Extension):
+    tags = {'comment'}
+
+    def parse(self, parser: jinja2.parser.Parser):
+        lineno = next(parser.stream).lineno
+        parser.parse_statements(("name:endcomment",), drop_needle=True)
+        node = jinja2.nodes.ExprStmt(lineno=lineno)
+        node.node = jinja2.nodes.Const.from_untrusted(None)
+        return node
+
+    def filter_stream(self, stream: TokenStream) -> TokenStream | Iterable[Token]:
+        args = False
+        for token in stream:
+            if (token.type, token.value) == ("name", "assign"):
+                print(token.type, "set")
+                yield Token(token.lineno, token.type, "set")
+            elif (token.type, token.value) == ("name", "number_of_words"):
+                print(token.type, "wordcount")
+                yield Token(token.lineno, token.type, "wordcount")
+            elif (token.type, token.value) == ("name", "strip_html"):
+                print(token.type, "striptags")
+                yield Token(token.lineno, token.type, "striptags")
+            elif (token.type, token.value) == ("name", "capture"):
+                print(token.type, "set")
+                yield Token(token.lineno, token.type, "set")
+            elif (token.type, token.value) == ("name", "endcapture"):
+                print(token.type, "set")
+                yield Token(token.lineno, token.type, "endset")
+            elif (token.type, token.value) == ("name", "unless"):
+                args = True
+                print(token.type, "if")
+                yield Token(token.lineno, token.type, "if")
+                print(token.type, "not")
+                yield Token(token.lineno, token.type, "not")
+                print('lparen', "(")
+                yield Token(token.lineno, 'lparen', "(")
+            elif (token.type, token.value) == ("name", "endunless"):
+                print(token.type, "endif")
+                yield Token(token.lineno, token.type, "endif")
+            elif token.value == ':':
+                args = True
+                print('lparen', '(')
+                yield Token(token.lineno, 'lparen', '(')
+            elif token.type in {'pipe', 'block_end', 'variable_end'}:
+                if args:
+                    print('rparen', ')')
+                    yield Token(token.lineno, 'rparen', ')')
+                    args = False
+                print(token.type, token.value)
+                yield token
+            else:
+                print(token.type, token.value)
+                yield token
+
+
+def slugify(text: str) -> str:
+    """Replace bad characters for use in a path"""
+    return re.sub('[^a-z0-9-]+', '-', text.lower().replace("'", ""))

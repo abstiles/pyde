@@ -64,3 +64,7 @@ class MarkdownHandler:
     def parse(self, markdown: str, env: None | EnvType=None) -> str:
         """Parse Markdown to HTML"""
         return str(self.md.render(markdown, env))
+
+
+def markdownify(markdown: str) -> str:
+    return Markdown(markdown).html

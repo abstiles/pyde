@@ -2,17 +2,18 @@
 Build logic for Pyde
 """
 
+from argparse import Namespace
+from   dataclasses              import dataclass, field
+from   pathlib                  import Path
 import re
 import sys
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import NewType
+from   typing                   import NewType
 
 import yaml
 
-from .config import Config, SourceFile
-from .markdown import Markdown
-from .templates import Template, TemplateError
+from   .config                  import Config, SourceFile
+from   .markdown                import Markdown
+from   .templates               import Template, TemplateError
 
 
 HTML = NewType('HTML', str)
@@ -35,8 +36,7 @@ class FileData:
         frontmatter, content = split_frontmatter(file.path.read_text())
         has_frontmatter = frontmatter is not None
         meta = {
-            **file.values,
-            **(yaml.safe_load(frontmatter or '') or {}),
+            "page": Namespace(**{**file.values, **(yaml.safe_load(frontmatter or '') or {})}),
             "path": str(file.path.parent),
             "basename": file.path.name,
         }
@@ -68,7 +68,7 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
             file.meta['title'] = file.meta.get('title', file.meta['basename'])
         dest = dest_dir / get_path(file.meta)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        template_name = f'{file.meta.get("layout", "default")}.{dest_type}'
+        template_name = f'{file.meta["page"].layout}.{dest_type}'
         data = {**file.meta, "content": content}
         try:
             dest.write_text(template.apply(template_name, data))
@@ -86,11 +86,6 @@ def get_path(meta: dict[str, object]) -> Path:
     def get(match: re.Match[str]) -> str:
         return str(meta.get(match.group(1), ''))
     return Path(re.sub(r':(\w+)', get, path).lstrip('/'))
-
-
-def slugify(text: str) -> str:
-    """Replace bad characters for use in a path"""
-    return re.sub('[^a-z0-9-]+', '-', text.lower().replace("'", ""))
 
 
 def split_frontmatter(source: str) -> tuple[str | None, str]:

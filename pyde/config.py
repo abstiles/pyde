@@ -6,6 +6,7 @@ from   dataclasses              import dataclass, field
 from   functools                import partial
 from   glob                     import glob
 from   os                       import PathLike
+from   os.path                  import isdir
 from   pathlib                  import Path
 from   typing                   import Iterable
 
@@ -37,12 +38,11 @@ class Config:
         self, root: PathType='.', exclude: Iterable[PathType]=()
     ) -> Iterable[SourceFile]:
         """Iterate through all files included in the build"""
-        globber = partial(glob, root_dir=root, recursive=True)
+        globber = partial(iterglob, root=root)
         excluded = set(flatmap(globber, set([*map(str, exclude), *self.exclude])))
-        excluded_dirs = set(f for f in excluded if Path(f).is_dir())
+        excluded_dirs = set(f for f in excluded if isdir(f))
         included = set(flatmap(globber, set(['**', *self.include])))
-        filenames = map(str, included - excluded)
-        paths = map(Path, filenames)
+        paths = map(Path, included - excluded)
         files = filter(Path.is_file, paths)
         return (
             self.source_file(file) for file in files
@@ -57,9 +57,14 @@ class Config:
 
     def source_file(self, path: Path) -> SourceFile:
         """Attach metadata for file given scope defaults"""
-        values: dict[str, str] = {"permalink": self.permalink}
+        values: dict[str, str] = {"permalink": self.permalink, "layout": "default"}
         for default in self.defaults:
             scope_path = Path(default.get('scope', {}).get('path', '.'))
             if scope_path in path.parents:
                 values.update(default.get('values', {}))
         return SourceFile(path=path, values=values)
+
+
+def iterglob(pattern: str, root: PathType='.') -> Iterable[str]:
+    for path in glob(pattern, root_dir=root, recursive=True):
+        yield str(path)
