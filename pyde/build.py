@@ -2,7 +2,7 @@
 Build logic for Pyde
 """
 
-from argparse import Namespace
+from   argparse                 import Namespace
 from   dataclasses              import dataclass, field
 from   pathlib                  import Path
 import re
@@ -36,7 +36,10 @@ class FileData:
         frontmatter, content = split_frontmatter(file.path.read_text())
         has_frontmatter = frontmatter is not None
         meta = {
-            "page": Namespace(**{**file.values, **(yaml.safe_load(frontmatter or '') or {})}),
+            "page": Namespace(**{
+                **file.values,
+                **(yaml.safe_load(frontmatter or '') or {}), "content": content}
+            ),
             "path": str(file.path.parent),
             "basename": file.path.name,
         }
@@ -68,6 +71,7 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
             file.meta['title'] = file.meta.get('title', file.meta['basename'])
         dest = dest_dir / get_path(file.meta)
         dest.parent.mkdir(parents=True, exist_ok=True)
+        file.meta["page"].dir = dest.parent
         template_name = f'{file.meta["page"].layout}.{dest_type}'
         data = {**file.meta, "content": content}
         try:

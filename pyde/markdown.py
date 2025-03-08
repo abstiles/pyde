@@ -1,13 +1,14 @@
 """Handler for parsing Markdown"""
 
+from   dataclasses              import dataclass, field
 import sys
-from dataclasses import dataclass, field
 
-from markdown_it import MarkdownIt
-from markdown_it.token import Token
-from markdown_it.utils import EnvType
-from mdit_py_plugins.footnote import footnote_plugin
-from mdit_py_plugins.front_matter import front_matter_plugin
+from   markdown_it              import MarkdownIt
+from   markdown_it.token        import Token
+from   markdown_it.utils        import EnvType
+from   mdit_py_plugins.footnote import footnote_plugin
+from   mdit_py_plugins.front_matter \
+                                import front_matter_plugin
 import yaml
 
 
