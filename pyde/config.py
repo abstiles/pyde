@@ -66,5 +66,6 @@ class Config:
 
 
 def iterglob(pattern: str, root: PathType='.') -> Iterable[str]:
+    root = Path(root)
     for path in glob(pattern, root_dir=root, recursive=True):
-        yield str(path)
+        yield str(root / path)

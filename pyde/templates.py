@@ -1,8 +1,8 @@
 """Handler for templated result files"""
 
-import re
-from datetime import datetime
+from   datetime                 import datetime
 from   pathlib                  import Path
+import re
 from   typing                   import Callable, Iterable
 
 import jinja2
@@ -32,7 +32,7 @@ class Template:
         self.env.filters['date'] = date
         self.env.filters['size'] = size
         self.env.filters['plus'] = lambda x, y: x + y
-        self.env.filters['divided_by'] = lambda x, y: x / y
+        self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
         self.env.filters['absolute_url'] = lambda x: x
         self.env.filters['relative_url'] = lambda x: x
 
@@ -89,76 +89,58 @@ class JekyllTranslator(Extension):
     tags = {'comment'}
 
     def parse(self, parser: jinja2.parser.Parser) -> jinja2.nodes.ExprStmt:
-        lineno = next(parser.stream).lineno
+        node = jinja2.nodes.ExprStmt(lineno=next(parser.stream).lineno)
         parser.parse_statements(("name:endcomment",), drop_needle=True)
-        node = jinja2.nodes.ExprStmt(lineno=lineno)
         node.node = jinja2.nodes.Const.from_untrusted(None)
         return node
+
+    def preprocess(self, source: str, name: str | None=None, filename=None):
+        return re.sub(r'\bfalse\b', 'False', re.sub(r'\btrue\b', 'True', source))
 
     def filter_stream(self, stream: TokenStream) -> TokenStream | Iterable[Token]:
         args = False
         for token in stream:
             if (token.type, token.value) == ("name", "assign"):
-                print(token.type, "set")
                 yield Token(token.lineno, token.type, "set")
             elif (token.type, token.value) == ("name", "number_of_words"):
-                print(token.type, "wordcount")
                 yield Token(token.lineno, token.type, "wordcount")
             elif (token.type, token.value) == ("name", "strip_html"):
-                print(token.type, "striptags")
                 yield Token(token.lineno, token.type, "striptags")
             elif (token.type, token.value) == ("name", "include"):
-                print(token.type, token.value)
                 yield Token(token.lineno, token.type, token.value)
                 path = '_includes/'
                 while (next_token := next(stream)).type != 'block_end':
                     path += next_token.value
-                print('string', path)
                 yield Token(token.lineno, 'string', path)
-                print(next_token.type, next_token.value)
                 yield Token(next_token.lineno, next_token.type, next_token.value)
             elif token.type == "dot":
                 next_token = next(stream)
                 if next_token.value == 'size':
-                    print('pipe', '|')
                     yield Token(token.lineno, 'pipe', '|')
-                    print('name', 'size')
                     yield Token(token.lineno, 'name', 'size')
                 else:
-                    print(token.type, token.value)
                     yield token
-                    print(next_token.type, next_token.value)
                     yield next_token
             elif (token.type, token.value) == ("name", "capture"):
-                print(token.type, "set")
                 yield Token(token.lineno, token.type, "set")
             elif (token.type, token.value) == ("name", "endcapture"):
-                print(token.type, "set")
                 yield Token(token.lineno, token.type, "endset")
             elif (token.type, token.value) == ("name", "unless"):
                 args = True
-                print(token.type, "if")
                 yield Token(token.lineno, token.type, "if")
-                print(token.type, "not")
                 yield Token(token.lineno, token.type, "not")
-                print('lparen', "(")
                 yield Token(token.lineno, 'lparen', "(")
             elif (token.type, token.value) == ("name", "endunless"):
-                print(token.type, "endif")
                 yield Token(token.lineno, token.type, "endif")
             elif token.value == ':':
                 args = True
-                print('lparen', '(')
                 yield Token(token.lineno, 'lparen', '(')
             elif token.type in {'pipe', 'block_end', 'variable_end'}:
                 if args:
-                    print('rparen', ')')
                     yield Token(token.lineno, 'rparen', ')')
                     args = False
-                print(token.type, token.value)
                 yield token
             else:
-                print(token.type, token.value)
                 yield token
 
 
