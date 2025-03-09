@@ -90,7 +90,7 @@ class FileData:
             is_binary = True
         has_frontmatter = frontmatter is not None
         if file.path.suffix == '.md':
-            basename = file.path.with_suffix('.html').name
+            basename = file.path.stem
         else:
             basename = file.path.name
         meta = Data(
@@ -102,8 +102,8 @@ class FileData:
             basename=basename,
         )
         meta.title = meta.title or meta.basename
-        meta.page.url = get_path(meta)
-        meta.page.dir = f'/{Path(meta.page.url).parent}/'
+        meta.page.url = f'/{get_path(meta)}'
+        meta.page.dir = f'{Path(meta.page.url).parent}/'
         # A stupid hack
         if meta.page.links is None:
             meta.page.links = []
@@ -117,7 +117,8 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
     template = Template.from_config(config)
     sources = config.iter_files(src_dir, exclude=[dest_dir])
     files = [*map(FileData.load, sources)]
-    site = Data(pages=[file.meta.page for file in files if file.type == "md"])
+    site = Data(pages=[file.meta.page for file in files if file.type == "md"],
+                url=config.url)
     for file in files:
         dest_type = file.type
         if file.has_frontmatter:
@@ -131,11 +132,10 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
             content = file.content
         if file.type == 'md':
             dest_type = 'html'
-            md = Markdown(content)
-            content = md.html
-            file.meta['basename'] = file.path.with_suffix('.html').name
-            file.meta['title'] = file.meta.title or file.meta['basename']
+            content = Markdown(content).html
         dest = dest_dir / get_path(file.meta)
+        if dest_type == 'html':
+            dest = dest.with_suffix('.html')
         dest.parent.mkdir(parents=True, exist_ok=True)
         file.meta.page.dir = f'/{dest.parent.relative_to(dest_dir)}/'
         file.meta.page.content = file.content

@@ -31,12 +31,11 @@ class Template:
         self.env.filters['slugify'] = slugify
         self.env.filters['append'] = append
         self.env.filters['date'] = date
-        self.env.filters['where'] = where
         self.env.filters['where_exp'] = where_exp
         self.env.filters['sort_natural'] = sort_natural
         self.env.filters['size'] = size
-        self.env.filters['plus'] = lambda x, y: x + y
-        self.env.filters['minus'] = lambda x, y: x - y
+        self.env.filters['plus'] = lambda x, y: int(x) + int(y)
+        self.env.filters['minus'] = lambda x, y: int(x) - int(y)
         self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
         self.env.filters['absolute_url'] = lambda x: x
         self.env.filters['relative_url'] = lambda x: x
@@ -120,14 +119,14 @@ class JekyllTranslator(Extension):
                 yield Token(token.lineno, token.type, "striptags")
             elif (token.type, token.value) == ("name", "forloop"):
                 yield Token(token.lineno, token.type, "loop")
-            # elif (token.type, token.value) == ("name", "where"):
-            #     args = True
-            #     yield Token(token.lineno, token.type, 'selectattr')
-            #     next(stream) # colon
-            #     yield Token(token.lineno, 'lparen', '(')
-            #     yield next(stream)
-            #     yield Token(token.lineno, 'comma', ',')
-            #     yield Token(token.lineno, 'string', 'equalto')
+            elif (token.type, token.value) == ("name", "where"):
+                args = True
+                yield Token(token.lineno, token.type, 'selectattr')
+                next(stream) # colon
+                yield Token(token.lineno, 'lparen', '(')
+                yield next(stream)
+                yield Token(token.lineno, 'comma', ',')
+                yield Token(token.lineno, 'string', 'equalto')
             elif (token.type, token.value) == ("name", "include"):
                 yield Token(token.lineno, token.type, token.value)
                 path = '_includes/'
@@ -188,10 +187,6 @@ def size(it: object | None) -> int:
         return len(it)
     except TypeError:
         return 0
-
-
-def where(iterable: Iterable[Any], attr: str, equals: str) -> Iterable[Any]:
-    return [*filter(lambda it: getattr(it, attr) == equals, iterable)]
 
 
 def where_exp(iterable: Iterable[Any], var: str, expression: str) -> Iterable[Any]:
