@@ -21,6 +21,7 @@ PathType = str | PathLike[str]
 class SourceFile:
     """A source file with additional metadata attached"""
     path: Path
+    root: Path
     values: dict[str, str]
 
 
@@ -45,7 +46,7 @@ class Config:
         paths = map(Path, included - excluded)
         files = filter(Path.is_file, paths)
         return (
-            self.source_file(file) for file in files
+            self.source_file(file, from_root=Path(root)) for file in files
             if not excluded_dirs.intersection(map(str, file.parents))
         )
 
@@ -55,14 +56,14 @@ class Config:
         with file.open() as f:
             return cls(**yaml.safe_load(f))
 
-    def source_file(self, path: Path) -> SourceFile:
+    def source_file(self, path: Path, from_root: Path) -> SourceFile:
         """Attach metadata for file given scope defaults"""
         values: dict[str, str] = {"permalink": self.permalink, "layout": "default"}
         for default in self.defaults:
             scope_path = Path(default.get('scope', {}).get('path', '.'))
             if scope_path in path.parents:
                 values.update(default.get('values', {}))
-        return SourceFile(path=path, values=values)
+        return SourceFile(path=path, root=from_root, values=values)
 
 
 def iterglob(pattern: str, root: PathType='.') -> Iterable[str]:

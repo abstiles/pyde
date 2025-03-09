@@ -1,9 +1,10 @@
 """Handler for templated result files"""
 
-from   datetime                 import datetime
+from   datetime                 import datetime, timedelta, timezone
+from   operator                 import itemgetter
 from   pathlib                  import Path
 import re
-from   typing                   import Callable, Iterable
+from   typing                   import Any, Callable, Iterable
 
 import jinja2
 from   jinja2                   import (BaseLoader, Environment,
@@ -30,8 +31,12 @@ class Template:
         self.env.filters['slugify'] = slugify
         self.env.filters['append'] = append
         self.env.filters['date'] = date
+        self.env.filters['where'] = where
+        self.env.filters['where_exp'] = where_exp
+        self.env.filters['sort_natural'] = sort_natural
         self.env.filters['size'] = size
         self.env.filters['plus'] = lambda x, y: x + y
+        self.env.filters['minus'] = lambda x, y: x - y
         self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
         self.env.filters['absolute_url'] = lambda x: x
         self.env.filters['relative_url'] = lambda x: x
@@ -82,6 +87,8 @@ class TemplateLoader(BaseLoader):
             mtime = path.stat().st_mtime
             source = path.read_text()
             return source, str(path), lambda: mtime == path.stat().st_mtime
+        elif template.startswith('_includes'):
+            return '', '', lambda: True
         return '{{ content }}', "", lambda: True
 
 
@@ -95,7 +102,12 @@ class JekyllTranslator(Extension):
         return node
 
     def preprocess(self, source: str, name: str | None=None, filename=None):
-        return re.sub(r'\bfalse\b', 'False', re.sub(r'\btrue\b', 'True', source))
+        return (
+            re.sub(r'\bnil\b', 'None',
+            re.sub(r'\bfalse\b', 'False',
+            re.sub(r'\btrue\b', 'True',
+            source
+        ))))
 
     def filter_stream(self, stream: TokenStream) -> TokenStream | Iterable[Token]:
         args = False
@@ -106,6 +118,16 @@ class JekyllTranslator(Extension):
                 yield Token(token.lineno, token.type, "wordcount")
             elif (token.type, token.value) == ("name", "strip_html"):
                 yield Token(token.lineno, token.type, "striptags")
+            elif (token.type, token.value) == ("name", "forloop"):
+                yield Token(token.lineno, token.type, "loop")
+            # elif (token.type, token.value) == ("name", "where"):
+            #     args = True
+            #     yield Token(token.lineno, token.type, 'selectattr')
+            #     next(stream) # colon
+            #     yield Token(token.lineno, 'lparen', '(')
+            #     yield next(stream)
+            #     yield Token(token.lineno, 'comma', ',')
+            #     yield Token(token.lineno, 'string', 'equalto')
             elif (token.type, token.value) == ("name", "include"):
                 yield Token(token.lineno, token.type, token.value)
                 path = '_includes/'
@@ -166,3 +188,27 @@ def size(it: object | None) -> int:
         return len(it)
     except TypeError:
         return 0
+
+
+def where(iterable: Iterable[Any], attr: str, equals: str) -> Iterable[Any]:
+    return [*filter(lambda it: getattr(it, attr) == equals, iterable)]
+
+
+def where_exp(iterable: Iterable[Any], var: str, expression: str) -> Iterable[Any]:
+    condition = eval(f'lambda {var}: {expression}')
+    return [*filter(condition, iterable)]
+
+
+def sort_natural(iterable: Iterable[Any], sort_type: str) -> Iterable[Any]:
+    def get_date(it: Any):
+        if isinstance(it.date, datetime):
+            return it.date
+        return (
+            datetime(*it.date.timetuple()[:3])
+            .replace(hour=12, tzinfo=timezone(timedelta(hours=-6)))
+        )
+    if sort_type == 'date':
+        key = get_date
+    else:
+        key = itemgetter(sort_type)
+    return sorted(iterable, key=key)

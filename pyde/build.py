@@ -57,12 +57,16 @@ class Data(Mapping[str, object]):
     def __delattr__(self, key: str) -> None:
         del self[key]
 
+    def __repr__(self) -> str:
+        return repr(self._d)
+
 
 @dataclass
 class FileData:
     path: Path
     meta: dict[str, object] = field(default_factory=dict)
     has_frontmatter: bool = False
+    is_binary: bool = False
 
     @property
     def type(self) -> str:
@@ -70,12 +74,20 @@ class FileData:
         return ''.join(self.path.suffixes).lstrip('.')
 
     @property
-    def content(self) -> str:
-        return get_content(self.path.read_text())
+    def content(self) -> str | bytes:
+        try:
+            return get_content(self.path.read_text())
+        except UnicodeDecodeError:
+            return self.path.read_bytes()
 
     @classmethod
     def load(cls, file: SourceFile) -> 'FileData':
-        frontmatter = get_frontmatter(file.path.read_text())
+        is_binary = False
+        try:
+            frontmatter = get_frontmatter(file.path.read_text())
+        except UnicodeDecodeError:
+            frontmatter = None
+            is_binary = True
         has_frontmatter = frontmatter is not None
         if file.path.suffix == '.md':
             basename = file.path.with_suffix('.html').name
@@ -85,14 +97,19 @@ class FileData:
             page=Data({
                 **file.values,
                 **(yaml.safe_load(frontmatter or '') or {}),
-                "dir": f'/{file.path.parent}/',
             }),
             path=str(file.path.parent),
             basename=basename,
         )
         meta.title = meta.title or meta.basename
-        meta.url = get_path(meta)
-        return cls(file.path, meta, has_frontmatter)
+        meta.page.url = get_path(meta)
+        meta.page.dir = f'/{Path(meta.page.url).parent}/'
+        # A stupid hack
+        if meta.page.links is None:
+            meta.page.links = []
+        if 'alt' not in meta.page:
+            meta.page.alt = None
+        return cls(file.path, meta, has_frontmatter, is_binary)
 
 
 def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
@@ -100,7 +117,7 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
     template = Template.from_config(config)
     sources = config.iter_files(src_dir, exclude=[dest_dir])
     files = [*map(FileData.load, sources)]
-    site = Data(pages=[file.meta.page for file in files])
+    site = Data(pages=[file.meta.page for file in files if file.type == "md"])
     for file in files:
         dest_type = file.type
         if file.has_frontmatter:
@@ -120,7 +137,7 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
             file.meta['title'] = file.meta.title or file.meta['basename']
         dest = dest_dir / get_path(file.meta)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        file.meta.page.dir = dest.parent
+        file.meta.page.dir = f'/{dest.parent.relative_to(dest_dir)}/'
         file.meta.page.content = file.content
         template_name = f'{file.meta["page"].layout}.{dest_type}'
         data = {**file.meta, "site": site, "content": content}
