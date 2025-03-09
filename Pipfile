@@ -7,6 +7,7 @@ name = "pypi"
 pyde = {file = ".", editable = true}
 jinja2 = "*"
 smartypants = "*"
+markdown = "*"
 
 [dev-packages]
 mypy = "*"
@@ -15,7 +16,6 @@ autoimport = "*"
 pyflyby = "*"
 ruff = "*"
 types-pyyaml = "*"
-markdown-it-py = {extras = ["plugins"], version = "*"}
 
 [requires]
 python_version = "3.11"

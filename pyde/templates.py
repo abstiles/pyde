@@ -166,7 +166,7 @@ class JekyllTranslator(Extension):
 
 def slugify(text: str) -> str:
     """Replace bad characters for use in a path"""
-    return re.sub('[^a-z0-9-]+', '-', text.lower().replace("'", ""))
+    return re.sub('[^a-z0-9-]+', '-', text.lower().replace("'", "")).strip(' -')
 
 
 def append(base: str | Path, to: str) -> Path | str:
