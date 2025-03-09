@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 pyde = {file = ".", editable = true}
 jinja2 = "*"
+smartypants = "*"
 
 [dev-packages]
 mypy = "*"

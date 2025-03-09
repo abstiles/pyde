@@ -6,9 +6,11 @@ import sys
 from   markdown_it              import MarkdownIt
 from   markdown_it.token        import Token
 from   markdown_it.utils        import EnvType
+from   mdit_py_plugins.attrs    import attrs_block_plugin, attrs_plugin
 from   mdit_py_plugins.footnote import footnote_plugin
 from   mdit_py_plugins.front_matter \
                                 import front_matter_plugin
+from   smartypants              import convert_entities, smartypants
 import yaml
 
 
@@ -30,14 +32,20 @@ class MarkdownHandler:
     def __init__(self) -> None:
         self.meta: dict[str, object] = {}
         self.md = (
-            MarkdownIt(
-                'commonmark', {'typographer': True},
-            )
+            MarkdownIt('commonmark', {'typographer': True})
                 .use(front_matter_plugin)
                 .use(footnote_plugin)
                 .enable(['replacements', 'smartquotes'])
         )
+        self.md.add_render_rule('text', self._smartify)
         self.md.add_render_rule('front_matter', self._front_matter)
+
+    def _smartify(
+        self, tokens: list[Token], idx: int, _options: object, _env: object
+    ) -> str:
+        text = tokens[idx].content
+        return convert_entities(smartypants(text), 0)
+
 
     def _front_matter(
         self, tokens: list[Token], idx: int, _options: object, _env: object

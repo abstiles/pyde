@@ -18,7 +18,7 @@ from   .markdown                import markdownify
 
 
 class Template:
-    def __init__(self, templates_dir: Path=Path('_layouts')):
+    def __init__(self, url: str, includes_dir: Path, templates_dir: Path):
         self.env = Environment(
             loader=TemplateLoader(templates_dir),
             autoescape=select_autoescape(
@@ -33,16 +33,17 @@ class Template:
         self.env.filters['date'] = date
         self.env.filters['where_exp'] = where_exp
         self.env.filters['sort_natural'] = sort_natural
+        self.env.filters['number_of_words'] = number_of_words
         self.env.filters['size'] = size
         self.env.filters['plus'] = lambda x, y: int(x) + int(y)
         self.env.filters['minus'] = lambda x, y: int(x) - int(y)
         self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
-        self.env.filters['absolute_url'] = lambda x: x
+        self.env.filters['absolute_url'] = lambda x: url.rstrip('/') + '/' + x.lstrip('/')
         self.env.filters['relative_url'] = lambda x: x
 
     @classmethod
     def from_config(cls, config: Config) -> 'Template':
-        return cls(config.layouts_dir)
+        return cls(config.url, config.includes_dir, config.layouts_dir)
 
     def get_template(self, name: str) -> JinjaTemplate:
         return self.env.get_template(name)
@@ -113,8 +114,6 @@ class JekyllTranslator(Extension):
         for token in stream:
             if (token.type, token.value) == ("name", "assign"):
                 yield Token(token.lineno, token.type, "set")
-            elif (token.type, token.value) == ("name", "number_of_words"):
-                yield Token(token.lineno, token.type, "wordcount")
             elif (token.type, token.value) == ("name", "strip_html"):
                 yield Token(token.lineno, token.type, "striptags")
             elif (token.type, token.value) == ("name", "forloop"):
@@ -207,3 +206,7 @@ def sort_natural(iterable: Iterable[Any], sort_type: str) -> Iterable[Any]:
     else:
         key = itemgetter(sort_type)
     return sorted(iterable, key=key)
+
+
+def number_of_words(s: str):
+    return len(s.split())

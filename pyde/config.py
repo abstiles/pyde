@@ -34,6 +34,7 @@ class Config:
     include: list[str] = field(default_factory=list)
     defaults: list[dict[str,dict[str,str]]] = field(default_factory=list)
     layouts_dir: Path = Path('_layouts')
+    includes_dir: Path = Path('_includes')
 
     def iter_files(
         self, root: PathType='.', exclude: Iterable[PathType]=()
