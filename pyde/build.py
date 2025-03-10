@@ -112,11 +112,10 @@ class FileData:
         return cls(file.path, meta, has_frontmatter, is_binary)
 
 
-def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
+def build_site(config: Config) -> None:
     """Build the site"""
     template = Template.from_config(config)
-    sources = config.iter_files(src_dir, exclude=[dest_dir])
-    files = [*map(FileData.load, sources)]
+    files = [*map(FileData.load, config.iter_files())]
     site = Data(pages=[file.meta.page for file in files if file.type == "md"],
                 url=config.url)
     for file in files:
@@ -133,11 +132,11 @@ def build_site(src_dir: Path, dest_dir: Path, config: Config) -> None:
         if file.type == 'md':
             dest_type = 'html'
             content = Markdown(content).html
-        dest = dest_dir / get_path(file.meta)
+        dest = config.output_dir / get_path(file.meta)
         if dest_type == 'html':
             dest = dest.with_suffix('.html')
         dest.parent.mkdir(parents=True, exist_ok=True)
-        file.meta.page.dir = f'/{dest.parent.relative_to(dest_dir)}/'
+        file.meta.page.dir = f'/{dest.parent.relative_to(config.output_dir)}/'
         file.meta.page.content = file.content
         template_name = f'{file.meta["page"].layout}.{dest_type}'
         data = {**file.meta, "site": site, "content": content}

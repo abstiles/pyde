@@ -19,10 +19,11 @@ def main() -> int:
     subparsers.required = True
     build_parser = subparsers.add_parser('build', help='Build your site')
     build_parser.set_defaults(func=build)
-    build_parser.add_argument('dir', type=directory, default='.', nargs='?')
+    build_parser.add_argument('dir', type=directory, nargs='?')
     build_parser.add_argument('-c', '--config', type=Path, default='_config.yml')
     build_parser.add_argument(
         '-d', '--destination', metavar='DIR', type=Path, default='_pysite')
+    build_parser.add_argument('--drafts', action='store_true')
     opts = parser.parse_args(args)
 
     status = opts.func(opts)
@@ -34,9 +35,14 @@ def main() -> int:
 
 def build(opts: argparse.Namespace) -> int:
     """Build the site"""
-    root = cast(Path, opts.dir)
-    dest = cast(Path, opts.destination)
-    build_site(root, dest, Config.parse(opts.config))
+    config = Config.parse(opts.config)
+    if opts.dir:
+        config.root = cast(Path, opts.dir)
+    if opts.drafts:
+        config.drafts = True
+    if opts.destination:
+        config.output_dir = cast(Path, opts.destination)
+    build_site(config)
     return 0
 
 
