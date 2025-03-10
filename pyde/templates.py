@@ -34,6 +34,8 @@ class Template:
         self.env.filters['where_exp'] = where_exp
         self.env.filters['sort_natural'] = sort_natural
         self.env.filters['number_of_words'] = number_of_words
+        self.env.filters['index'] = index
+        self.env.filters['real_slice'] = real_slice
         self.env.filters['size'] = size
         self.env.filters['plus'] = lambda x, y: int(x) + int(y)
         self.env.filters['minus'] = lambda x, y: int(x) - int(y)
@@ -145,6 +147,8 @@ class JekyllTranslator(Extension):
                 yield Token(token.lineno, token.type, "set")
             elif (token.type, token.value) == ("name", "endcapture"):
                 yield Token(token.lineno, token.type, "endset")
+            elif (token.type, token.value) == ("name", "elsif"):
+                yield Token(token.lineno, token.type, "elif")
             elif (token.type, token.value) == ("name", "unless"):
                 args = True
                 yield Token(token.lineno, token.type, "if")
@@ -213,3 +217,16 @@ def sort_natural(iterable: Iterable[Any], sort_type: str) -> Iterable[Any]:
 
 def number_of_words(s: str):
     return len(s.split())
+
+
+def real_slice(iterable: Iterable[Any], limit: int, offset: int) -> Any:
+    try:
+        return iterable[offset:offset+limit]
+    except TypeError:
+        return list(iterable)[offset:offset+limit]
+
+def index(iterable: Iterable[Any], idx: int) -> Any:
+    try:
+        return iterable[idx]
+    except TypeError:
+        return list(iterable)[idx]

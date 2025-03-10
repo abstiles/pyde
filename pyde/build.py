@@ -12,8 +12,9 @@ from   typing                   import Iterable, NewType
 import yaml
 
 from   .config                  import Config, SourceFile
-from   .markdown                import Markdown
+from   .markdown                import markdownify
 from   .templates               import Template, TemplateError
+from .utils import ilen
 
 
 HTML = NewType('HTML', str)
@@ -81,7 +82,9 @@ class FileData:
             return self.path.read_bytes()
 
     @classmethod
-    def load(cls, file: SourceFile) -> 'FileData':
+    def load(cls, file: SourceFile, globals: Data=None) -> 'FileData':
+        if globals is None:
+            globals = Data()
         is_binary = False
         try:
             frontmatter = get_frontmatter(file.path.read_text())
@@ -91,18 +94,28 @@ class FileData:
         has_frontmatter = frontmatter is not None
         if file.path.suffix == '.md':
             basename = file.path.stem
+            word_count = 1 + ilen(re.finditer(r'\s+', markdownify(get_content(file.path.read_text()))))
         else:
+            word_count = None
             basename = file.path.name
         meta = Data(
             page=Data({
+                'word_count': word_count,
                 **file.values,
                 **(yaml.safe_load(frontmatter or '') or {}),
             }),
             path=str(file.path.parent),
             basename=basename,
+            pyde=globals,
+            jekyll=globals,
         )
         meta.title = meta.title or meta.basename
-        meta.page.url = f'/{get_path(meta)}'
+        meta.file_path = f'{get_path(meta)}'
+        if Path(meta.file_path).name in ('index', 'index.html'):
+            meta.basename = ''
+            meta.page.url = f'/{get_path(meta)}/'
+        else:
+            meta.page.url = f'/{get_path(meta)}'
         meta.page.dir = f'{Path(meta.page.url).parent}/'
         # A stupid hack
         if meta.page.links is None:
@@ -110,6 +123,14 @@ class FileData:
         if 'alt' not in meta.page:
             meta.page.alt = None
         return cls(file.path, meta, has_frontmatter, is_binary)
+
+    @classmethod
+    def iter_files(cls, config: Config) -> Iterable['FileData']:
+        globals = Data(
+            drafts=config.drafts,
+            development=config.drafts,
+        )
+        return (cls.load(file) for file in config.iter_files())
 
 
 def build_site(config: Config) -> None:
@@ -131,8 +152,8 @@ def build_site(config: Config) -> None:
             content = file.content
         if file.type == 'md':
             dest_type = 'html'
-            content = Markdown(content).html
-        dest = config.output_dir / get_path(file.meta)
+            content = markdownify(content)
+        dest = config.output_dir / file.meta.file_path
         if dest_type == 'html':
             dest = dest.with_suffix('.html')
         dest.parent.mkdir(parents=True, exist_ok=True)
