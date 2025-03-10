@@ -6,21 +6,22 @@ from   dataclasses              import asdict, dataclass, field
 from typing import Any, ClassVar
 import sys
 
-from markdown import Markdown as Parser, Extension
+from markdown import Extension, Markdown as Parser
 import yaml
 
-from .smartier import SmartyExtension
+from .extensions.pm_attr_list import PMAttrListExtension
+from .extensions.blockquote import BlockQuoteExtension
 
 
 def _extensions() -> list[Extension | str]:
-    return ['extra', 'smarty', 'sane_lists']
+    return ['md_in_html', 'smarty', 'sane_lists', PMAttrListExtension(), BlockQuoteExtension()]
 
 
 def _ext_configs() -> dict[str, dict[str, Any]]:
     return {
         'smarty': {
             'substitutions': {
-                'left-single-quote': '‘', # sb is not a typo!
+                'left-single-quote': '‘',
                 'right-single-quote': '’',
                 'left-double-quote': '“',
                 'right-double-quote': '”',
@@ -50,7 +51,7 @@ class MarkdownConfig(Mapping[str, Any]):
 
 
 DASH_PATTERN = (
-    r'--'               # hyphens
+    r'--'                # hyphens
     r'|–|—'              # or Unicode
     r'|&[mn]dash;'       # or named dash entities
     r'|&#8211;|&#8212;'  # or decimal entities
@@ -92,6 +93,12 @@ LDQUOTE_FIX_RE = re.compile(
     f'({ELLIPSIS_PATTERN})'
 )
 
+BLOCKQUOTE_BR_RE = re.compile(r'^> \\$', flags=re.MULTILINE)
+WITHIN_BLOCK_ATTR_RE = re.compile(
+    r'\s*\n> (\{:?[^}]*\w[^}]*\})\s*$',
+    flags=re.MULTILINE
+)
+
 @dataclass
 class Markdown:
     """Markdown parser"""
@@ -100,8 +107,8 @@ class Markdown:
     parser: ClassVar[Parser]
 
     def __post_init__(self) -> None:
-        self.html = self.clean_wrong_quotes(
-            self.get_parser().convert(self.markdown)
+        self.html = self.clean(
+            self.get_parser().convert(self.preprocess(self.markdown))
         )
 
     @classmethod
@@ -113,7 +120,14 @@ class Markdown:
         return cls.parser
 
     @staticmethod
-    def clean_wrong_quotes(html: str):
+    def preprocess(markdown: str) -> str:
+        fixed = markdown
+        fixed = re.sub(BLOCKQUOTE_BR_RE, '> <br />', fixed)
+        fixed = re.sub(WITHIN_BLOCK_ATTR_RE, r' \1', fixed)
+        return fixed
+
+    @staticmethod
+    def clean(html: str) -> str:
         fixed = html
         fixed = RDQUOTE_FIX_RE.sub(r'\1”', fixed)
         fixed = RDQUOTE_FIX_RE2.sub(r'”\1', fixed)
