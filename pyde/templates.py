@@ -1,5 +1,6 @@
 """Handler for templated result files"""
 
+from   contextlib               import contextmanager
 from   datetime                 import datetime, timedelta, timezone
 from   operator                 import itemgetter
 from   pathlib                  import Path
@@ -8,13 +9,14 @@ from   typing                   import Any, Callable, Iterable
 
 import jinja2
 from   jinja2                   import (BaseLoader, Environment,
-                                        Template as JinjaTemplate,
+                                        Template as JinjaTemplate, lexer,
                                         select_autoescape)
 from   jinja2.ext               import Extension
-from   jinja2.lexer             import Token, TokenStream
+from   jinja2.lexer             import Lexer, Token, TokenStream
 
 from   .config                  import Config
 from   .markdown                import markdownify
+from   .utils                   import prepend
 
 
 class Template:
@@ -27,6 +29,7 @@ class Template:
             ),
             extensions=[JekyllTranslator, 'jinja2.ext.loopcontrols'],
         )
+        self.env.extend(pyde_includes_dir=includes_dir, pyde_templates_dir=templates_dir)
         self.env.filters['markdownify'] = markdownify
         self.env.filters['slugify'] = slugify
         self.env.filters['append'] = append
@@ -112,60 +115,185 @@ class JekyllTranslator(Extension):
         ))))
 
     def filter_stream(self, stream: TokenStream) -> TokenStream | Iterable[Token]:
+        debug = False
         args = False
-        for token in stream:
+        token_type, token_value, lineno = None, None, 0
+        state: str | None = None
+
+        @contextmanager
+        def parse_state(new_state):
+            nonlocal state
+            old_state = state
+            state = new_state
+            yield
+            state = old_state
+
+        sublexer = Sublexer(self.environment, stream.name, stream.filename)
+        def tokenize(s: str) -> Iterable[Token]:
+            return sublexer.tokenize(s, lineno=lineno, state=state, debug=debug)
+
+        def tok(*args, **kwargs: Any) -> Token:
+            nonlocal token_type, token_value, lineno
+            if args and isinstance(args[0], Token):
+                token = args[0]
+            elif args:
+                token = Token(lineno, token_type, args[0])
+            elif kwargs:
+                token = Token(lineno, *next(iter(kwargs.items())))
+            else:
+                token = Token(lineno, token_type, token_value)
+            if debug:
+                print(f'Token: {token.type!r} {token.value!r}')
+            return current(token)
+
+        def current(token: Token) -> Token:
+            nonlocal lineno, token_type, token_value
+            lineno, token_type, token_value = token.lineno, token.type, token.value
+            return token
+
+        def passthrough() -> Token:
+            return tok(next(stream))
+
+        for token in map(current, stream):
+            state = None
             if (token.type, token.value) == ("name", "assign"):
-                yield Token(token.lineno, token.type, "set")
+                yield tok('set')
             elif (token.type, token.value) == ("name", "strip_html"):
-                yield Token(token.lineno, token.type, "striptags")
+                yield tok('striptags')
             elif (token.type, token.value) == ("name", "forloop"):
-                yield Token(token.lineno, token.type, "loop")
+                yield tok('loop')
             elif (token.type, token.value) == ("name", "where"):
                 args = True
-                yield Token(token.lineno, token.type, 'selectattr')
+                yield tok('selectattr')
                 next(stream) # colon
-                yield Token(token.lineno, 'lparen', '(')
-                yield next(stream)
-                yield Token(token.lineno, 'comma', ',')
-                yield Token(token.lineno, 'string', 'equalto')
+                yield tok(lparen='(')
+                yield passthrough()
+                yield tok(comma=',')
+                yield tok(string='equalto')
             elif (token.type, token.value) == ("name", "include"):
-                yield Token(token.lineno, token.type, token.value)
-                path = '_includes/'
-                while (next_token := next(stream)).type != 'block_end':
-                    path += next_token.value
-                yield Token(token.lineno, 'string', path)
-                yield Token(next_token.lineno, next_token.type, next_token.value)
+                # Transform an include statement with arguments into a
+                # with/include pair. Given:
+                #     {% include f.html a=b x=y %}
+                # Then emit:
+                #     {% with includes = namespace() %}
+                #     {% set includes.a = b %}
+                #     {% set includes.x = y %}
+                #     {% include "f.html" %}
+                #     {% endwith %}
+                # Also look for references to variables on "include"
+                # and transform them to match. Given:
+                #     {{ include.page }}
+                # Then emit:
+                #     {{ includes.page }}
+
+                # First check if this is a namespace reference.
+                next_token = next(stream)
+                if next_token.type == 'dot':
+                    yield tok(name='includes')
+                    yield tok(next_token)
+                    continue
+
+                # We know this is an include statement. Replace the token we
+                # just checked and set the state to "block".
+                state = 'block'
+                rest = iter(prepend(next_token, stream))
+
+                # Assume the next few tokens belong to the template name until
+                # we see two names in a row.
+                include = ''
+                last_type = None
+                while (next_token := next(rest)).type != 'block_end':
+                    if next_token.type == last_type:
+                        # Two in a row - end of the include name.
+                        break
+                    include += next_token.value
+                    last_type = next_token.type
+                # Whichever reason broke out of the loop, put the token back.
+                rest = iter(prepend(next_token, stream))
+
+                # Capture the assignments and put them on 'includes'.
+                assignments = []
+                while (name := next(rest)).type != 'block_end':
+                    stream.expect(lexer.TOKEN_ASSIGN)
+                    rhs = next(stream)
+                    if rhs.type is lexer.TOKEN_BLOCK_END:
+                        raise jinja2.exceptions.TemplateSyntaxError(
+                            "unexpected end of block, assignment incomplete",
+                            rhs.lineno, stream.name, stream.filename,
+                        )
+                    assignments.append((name.value, rhs.value))
+                block_end = next_token
+
+                # If there are assignments, emit the 'with' block, followed
+                # by the assignments
+                if assignments:
+                    yield from tokenize('with includes = namespace() %}')
+                    with parse_state(None):
+                        for (name, rhs) in assignments:
+                            yield from tokenize(f'{{% set includes.{name} = {rhs} %}}')
+                    yield tok(block_begin='{%')
+
+                # Emit the include statement
+                path = self.environment.pyde_includes_dir / include
+                yield from tokenize(f'include "{path}" %}}')
+                state = None
+                if assignments:
+                    yield from tokenize('{% endwith %}')
             elif token.type == "dot":
                 next_token = next(stream)
                 if next_token.value == 'size':
-                    yield Token(token.lineno, 'pipe', '|')
-                    yield Token(token.lineno, 'name', 'size')
+                    yield tok(pipe='|')
+                    yield tok(name='size')
                 else:
-                    yield token
-                    yield next_token
+                    yield tok()
+                    yield tok(next_token)
             elif (token.type, token.value) == ("name", "capture"):
-                yield Token(token.lineno, token.type, "set")
+                yield tok('set')
             elif (token.type, token.value) == ("name", "endcapture"):
-                yield Token(token.lineno, token.type, "endset")
+                yield tok('endset')
             elif (token.type, token.value) == ("name", "elsif"):
-                yield Token(token.lineno, token.type, "elif")
+                yield tok('elif')
             elif (token.type, token.value) == ("name", "unless"):
                 args = True
-                yield Token(token.lineno, token.type, "if")
-                yield Token(token.lineno, token.type, "not")
-                yield Token(token.lineno, 'lparen', "(")
+                yield tok('if')
+                yield tok('not')
+                yield tok(lparen='(')
             elif (token.type, token.value) == ("name", "endunless"):
-                yield Token(token.lineno, token.type, "endif")
+                yield tok('endif')
             elif token.value == ':':
                 args = True
-                yield Token(token.lineno, 'lparen', '(')
+                yield tok(lparen='(')
             elif token.type in {'pipe', 'block_end', 'variable_end'}:
                 if args:
-                    yield Token(token.lineno, 'rparen', ')')
+                    yield tok(rparen=')')
                     args = False
-                yield token
+                yield tok(token)
             else:
-                yield token
+                yield tok()
+
+
+class Sublexer:
+    def __init__(
+            self,
+            environment: Environment,
+            name: str | None=None,
+            filename: str | None=None
+    ):
+        self.lexer = Lexer(environment)
+        self.name = name
+        self.filename = filename
+
+    def tokenize(
+        self,
+        source: str,
+        lineno: int=0,
+        state: str | None=None,
+        debug=False,
+    ) -> Iterable[Token]:
+        for token in self.lexer.tokenize(source, self.name, self.filename, state):
+            if debug:
+                print(f'Token: {token.type!r} {token.value!r}')
+            yield Token(token.lineno + lineno, token.type, token.value)
 
 
 def slugify(text: str) -> str:

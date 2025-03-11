@@ -28,3 +28,7 @@ def ilen(it: Iterable[Any]) -> int:
     consumeall(zip(it, cnt)) # cnt must be second zip arg to avoid advancing too far
     # Since count 0 based, the next value is the count
     return next(cnt)
+
+
+def prepend(value: Any, it: Iterable[T]) -> Iterable[T]:
+    return chain([value], it)
