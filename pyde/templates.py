@@ -38,7 +38,7 @@ class Template:
         self.env.filters['sort_natural'] = sort_natural
         self.env.filters['number_of_words'] = number_of_words
         self.env.filters['index'] = index
-        self.env.filters['real_slice'] = real_slice
+        self.env.filters['slice'] = real_slice
         self.env.filters['size'] = size
         self.env.filters['plus'] = lambda x, y: int(x) + int(y)
         self.env.filters['minus'] = lambda x, y: int(x) - int(y)
@@ -191,6 +191,7 @@ class JekyllTranslator(Extension):
                 if next_token.type == 'dot':
                     yield tok(name='includes')
                     yield tok(next_token)
+                    yield passthrough()
                     continue
 
                 # We know this is an include statement. Replace the token we
@@ -198,39 +199,44 @@ class JekyllTranslator(Extension):
                 state = 'block'
                 rest = iter(prepend(next_token, stream))
 
-                # Assume the next few tokens belong to the template name until
-                # we see two names in a row.
-                include = ''
+                # Two names in a row or a name after a literal indicate a new
+                # argument. Split on that.
+                rest_tokens: list[list[Token]] = []
                 last_type = None
                 while (next_token := next(rest)).type != 'block_end':
-                    if next_token.type == last_type:
-                        # Two in a row - end of the include name.
-                        break
-                    include += next_token.value
+                    if (not rest_tokens or (
+                            next_token.type == 'name'
+                            and last_type in ('name', 'string', 'integer', 'float')
+                    )):
+                        rest_tokens.append([next_token])
+                    else:
+                        rest_tokens[-1].append(next_token)
                     last_type = next_token.type
-                # Whichever reason broke out of the loop, put the token back.
-                rest = iter(prepend(next_token, stream))
-
-                # Capture the assignments and put them on 'includes'.
-                assignments = []
-                while (name := next(rest)).type != 'block_end':
-                    stream.expect(lexer.TOKEN_ASSIGN)
-                    rhs = next(stream)
-                    if rhs.type is lexer.TOKEN_BLOCK_END:
-                        raise jinja2.exceptions.TemplateSyntaxError(
-                            "unexpected end of block, assignment incomplete",
-                            rhs.lineno, stream.name, stream.filename,
-                        )
-                    assignments.append((name.value, rhs.value))
                 block_end = next_token
 
-                # If there are assignments, emit the 'with' block, followed
-                # by the assignments
+                # First argument to include is the include name.
+                include = ''.join(str(t.value) for t in rest_tokens[0])
+
+                # Capture the assignments and put them on 'includes'.
+                assignments: list[tuple[str, list[Token]]] = []
+                for arg in rest_tokens[1:]:
+                    tokens = iter(arg)
+                    name = ''
+                    while (next_token := next(tokens)).type != lexer.TOKEN_ASSIGN:
+                        name += next_token.value
+                    rhs = [t if t.value != 'include' else tok(name='includes')
+                           for t in tokens]
+                    assignments.append((name, rhs))
+
+                # If there are assignments, emit the 'with' block, followed by
+                # the assignments
                 if assignments:
                     yield from tokenize('with includes = namespace() %}')
                     with parse_state(None):
                         for (name, rhs) in assignments:
-                            yield from tokenize(f'{{% set includes.{name} = {rhs} %}}')
+                            yield from tokenize(f'{{% set includes.{name} = ')
+                            yield from map(tok, rhs)
+                            yield tok(block_end='%}')
                     yield tok(block_begin='{%')
 
                 # Emit the include statement
@@ -323,8 +329,15 @@ def size(it: object | None) -> int:
         return 0
 
 
+name_pattern = r'[\w.]+'
+string_pattern = r'"[^"]*"' "|" r"'[^']*'"
+arg_pattern = f'{name_pattern}|{string_pattern}'
+
+contains_re = re.compile(f'({arg_pattern}) contains ({arg_pattern})')
+
 def where_exp(iterable: Iterable[Any], var: str, expression: str) -> Iterable[Any]:
-    condition = eval(f'lambda {var}: {expression}')
+    fixed = contains_re.sub(r'\2 in \1', expression)
+    condition = eval(f'lambda {var}: {fixed}')
     return [*filter(condition, iterable)]
 
 
@@ -347,7 +360,7 @@ def number_of_words(s: str):
     return len(s.split())
 
 
-def real_slice(iterable: Iterable[Any], limit: int, offset: int) -> Any:
+def real_slice(iterable: Iterable[Any], offset: int, limit: int) -> Any:
     try:
         return iterable[offset:offset+limit]
     except TypeError:

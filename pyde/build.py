@@ -128,7 +128,7 @@ class FileData:
     def iter_files(cls, config: Config) -> Iterable['FileData']:
         globals = Data(
             drafts=config.drafts,
-            development=config.drafts,
+            environment="development" if config.drafts else "production"
         )
         return (cls.load(file) for file in config.iter_files())
 
@@ -139,11 +139,12 @@ def build_site(config: Config) -> None:
     files = [*map(FileData.load, config.iter_files())]
     site = Data(pages=[file.meta.page for file in files if file.type == "md"],
                 url=config.url)
+    site.posts = site.pages
     for file in files:
         dest_type = file.type
         if file.has_frontmatter:
             try:
-                content = template.render(file.content, file.meta)
+                content = template.render(file.content, {"site": site, **file.meta})
             except TemplateError as exc:
                 print(f'Skipping {file.path} due to error: {exc.message}',
                       file=sys.stderr)
