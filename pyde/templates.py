@@ -60,7 +60,7 @@ class Template:
 
     def render(self, source: str, data: dict[str, object]) -> str:
         try:
-            return JinjaTemplate(source).render(data)
+            return self.env.from_string(source).render(data)
         except jinja2.exceptions.TemplateSyntaxError as exc:
             raise TemplateError("Invalid template syntax", exc.message) from exc
         except jinja2.exceptions.TemplateError as exc:
