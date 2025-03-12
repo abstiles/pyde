@@ -32,3 +32,9 @@ def ilen(it: Iterable[Any]) -> int:
 
 def prepend(value: Any, it: Iterable[T]) -> Iterable[T]:
     return chain([value], it)
+
+
+def ilast(it: Iterable[T]) -> T:
+    container: deque[T] = deque(maxlen=1)
+    container.extend(it)
+    return container[0]

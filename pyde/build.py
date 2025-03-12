@@ -4,32 +4,45 @@ Build logic for Pyde
 
 from   collections.abc          import Mapping
 from   dataclasses              import dataclass, field
+from   itertools                import dropwhile
 from   pathlib                  import Path
 import re
 import sys
-from   typing                   import Iterable, NewType
+import traceback
+from   typing                   import Iterable, NewType, NoReturn
 
 import yaml
+from markupsafe import Markup
 
 from   .config                  import Config, SourceFile
 from   .markdown                import markdownify
 from   .templates               import Template, TemplateError
-from .utils import ilen
+from   .utils                   import ilen
 
 
 HTML = NewType('HTML', str)
 
 
 class Data(Mapping[str, object]):
-    def __init__(self, d: dict[str, object]=None, **kwargs: object):
+    def __init__(self, d: dict[str, object]|None=None, _from: str='', **kwargs: dict[str, object]):
+        super().__setattr__('_from', _from)
         super().__setattr__('_d', d or {})
         self._d.update(kwargs)
+
+    def __html__(self) -> str:
+        return ''
+
+    def __str__(self) -> str:
+        return str(self._d).strip('{}')
 
     def __iter__(self) -> Iterable[str]:
         yield from self._d
 
     def __len__(self) -> int:
         len(self._d)
+
+    def __call__(self) -> NoReturn:
+        raise TypeError(f'Data object {self._from} is not callable')
 
     def __bool__(self) -> bool:
         return bool(self._d)
@@ -44,7 +57,7 @@ class Data(Mapping[str, object]):
         try:
             return self._d[key]
         except KeyError:
-            return None
+            return Data(_from=f'{self._from}.{key}')
 
     def __setitem__(self, key: str, val: object) -> None:
         self._d[key] = val
@@ -61,6 +74,8 @@ class Data(Mapping[str, object]):
     def __repr__(self) -> str:
         return repr(self._d)
 
+
+PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)
 
 @dataclass
 class FileData:
@@ -84,7 +99,7 @@ class FileData:
     @classmethod
     def load(cls, file: SourceFile, globals: Data=None) -> 'FileData':
         if globals is None:
-            globals = Data()
+            globals = Data(_from='globals', title=file.path.stem)
         is_binary = False
         try:
             frontmatter = get_frontmatter(file.path.read_text())
@@ -92,19 +107,29 @@ class FileData:
             frontmatter = None
             is_binary = True
         has_frontmatter = frontmatter is not None
+        excerpt = ''
+        word_count = 0
         if file.path.suffix == '.md':
             basename = file.path.stem
-            word_count = 1 + ilen(re.finditer(r'\s+', markdownify(get_content(file.path.read_text()))))
+            try:
+                html = markdownify(get_content(file.path.read_text()))
+                excerpt = PARA_RE.search(html)[0]
+                word_count = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
+            except Exception:  # noqa
+                pass
         else:
             word_count = None
             basename = file.path.name
+
         meta = Data(
+            _from=f'File({file.path}).page',
             page=Data({
                 'word_count': word_count,
+                'excerpt': excerpt,
                 **file.values,
                 **(yaml.safe_load(frontmatter or '') or {}),
-            }),
-            path=str(file.path.parent),
+            }, f'File({file.path}).page'),
+            path=str(file.path.parent.relative_to(file.root)),
             basename=basename,
             pyde=globals,
             jekyll=globals,
@@ -170,6 +195,12 @@ def build_site(config: Config) -> None:
                 f' {template_name}: {exc.message}',
                 file=sys.stderr
             )
+            template_tb = dropwhile(
+                lambda l: 'template code' not in l,
+                traceback.format_exception(exc.__cause__)
+            )
+            print(''.join(template_tb), file=sys.stderr)
+            #print(traceback.format_exc(), file=sys.stderr)
 
 
 def get_path(meta: Data) -> Path:
