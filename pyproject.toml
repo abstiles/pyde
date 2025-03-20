@@ -37,6 +37,9 @@ float_to_top = true
 skip_gitignore = true
 line_length = 88
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.pylint.main]
 # Analyse import fallback blocks. This can be used to support both Python 2 and 3
 # compatible code, which means that the block might have code that exists only in
@@ -196,7 +199,7 @@ const-naming-style = "UPPER_CASE"
 
 # Minimum line length for functions/classes that require docstrings, shorter ones
 # are exempt.
-docstring-min-length = -1
+# docstring-min-length = 5
 
 # Naming style matching correct function names.
 function-naming-style = "snake_case"
@@ -349,10 +352,10 @@ max-line-length = 88
 
 # Allow the body of a class to be on the same line as the declaration if body
 # contains single statement.
-# single-line-class-stmt =
+single-line-class-stmt = true
 
 # Allow the body of an if to be on the same line as the test if there is no else.
-# single-line-if-stmt =
+single-line-if-stmt = true
 
 [tool.pylint.imports]
 # List of modules that can be imported at any level, not just the top level one.
@@ -413,7 +416,12 @@ confidence = ["HIGH", "CONTROL_FLOW", "INFERENCE", "INFERENCE_FAILURE", "UNDEFIN
 # no Warning level messages displayed, use "--disable=all --enable=classes
 # --disable=W".
 disable = [
+    "no-member",  # Pylint doesn't understand NewType
+    "not-an-iterable", # Pylint is bad at this compared to mypy
+    "too-many-arguments",
     "missing-function-docstring",
+    "missing-class-docstring",
+    "missing-module-docstring",
     "too-few-public-methods",
     "too-many-instance-attributes",
     "raw-checker-failed",

@@ -1,39 +1,51 @@
 """Handler for templated result files"""
 
-from   collections.abc          import Mapping
-from   contextlib               import contextmanager
-from   datetime                 import datetime, timedelta, timezone
-from   operator                 import itemgetter
-from   pathlib                  import Path
 import re
-from   typing                   import Any, Callable, Iterable, TypeVar
+import sys
+from collections.abc import Callable, Iterator, Iterable, Mapping, Sequence, Sized
+from collections import namedtuple
+from contextlib import contextmanager
+from datetime import date as date_only, datetime, timezone
+from operator import itemgetter, attrgetter
+from pathlib import Path
+from typing import Any, Self, TypeVar, cast
 
 import jinja2
-from   jinja2                   import (BaseLoader, Environment,
-                                        Template as JinjaTemplate, lexer,
-                                        pass_context, select_autoescape)
-from   jinja2.ext               import Extension
-from   jinja2.lexer             import Lexer, Token, TokenStream
-from   jinja2.runtime           import Context
-from   jinja2.utils             import Namespace
+from jinja2 import BaseLoader, Environment
+from jinja2 import Template as JinjaTemplate
+from jinja2 import lexer, pass_context, pass_environment, select_autoescape
+from jinja2.ext import Extension
+from jinja2.lexer import Lexer, Token, TokenStream
+from jinja2.runtime import Context, Undefined
+from jinja2.utils import Namespace
 
-from   .config                  import Config
-from   .markdown                import markdownify
-from   .utils                   import ilast, prepend
+from .config import Config
+from .markdown import markdownify
+from .utils import first as ifirst, last as ilast, prepend
+from .data import Data
+from .url import UrlPath
 
 
 class Template:
-    def __init__(self, url: str, includes_dir: Path, templates_dir: Path):
+    def __init__(
+        self, url: str, includes_dir: Path, templates_dir: Path, globals: Data,
+    ):
         self.env = Environment(
             loader=TemplateLoader(templates_dir),
             autoescape=select_autoescape(
                 enabled_extensions=(),
                 default_for_string=False,
             ),
+            undefined=ChainingUndefined,
             extensions=[JekyllTranslator, 'jinja2.ext.loopcontrols'],
         )
-        self.env.globals["includes"] = self.env.globals["namespace"]()
-        self.env.extend(pyde_includes_dir=includes_dir, pyde_templates_dir=templates_dir)
+        self.env.globals["includes"] = Namespace()
+        self.env.globals["pyde"] = globals
+        self.env.globals["jekyll"] = globals
+        self.env.extend(
+            pyde_includes_dir=includes_dir,
+            pyde_templates_dir=templates_dir
+        )
         self.env.filters['markdownify'] = markdownify
         self.env.filters['slugify'] = slugify
         self.env.filters['append'] = append
@@ -48,15 +60,21 @@ class Template:
         self.env.filters['limit'] = limit
         self.env.filters['last'] = last
         self.env.filters['namespace_to_dict'] = namespace_to_dict
-        self.env.filters['plus'] = lambda x, y: int(x) + int(y)
-        self.env.filters['minus'] = lambda x, y: int(x) - int(y)
+        self.env.filters['plus'] = plus
+        self.env.filters['minus'] = minus
         self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
-        self.env.filters['absolute_url'] = lambda x: url.rstrip('/') + '/' + x.lstrip('/')
-        self.env.filters['relative_url'] = lambda x: x
+        #self.env.filters['absolute_url'] = lambda x: url.rstrip('/') + '/' + x.lstrip('/')
+        self.env.filters['absolute_url'] = absolute_url
+        self.env.filters['relative_url'] = relative_url
+        self.env.filters['reverse'] = reverse
 
     @classmethod
     def from_config(cls, config: Config) -> 'Template':
-        return cls(config.url, config.includes_dir, config.layouts_dir)
+        globals = Data(
+            drafts=config.drafts,
+            environment="development" if config.drafts else "production"
+        )
+        return cls(config.url, config.includes_dir, config.layouts_dir, globals)
 
     def get_template(self, name: str) -> JinjaTemplate:
         return self.env.get_template(name)
@@ -125,6 +143,22 @@ class TemplateLoader(BaseLoader):
         return '{{ content }}', "", lambda: True
 
 
+UNDEFINED_FIELDS = ('hint', 'obj', 'name', 'exception')
+
+
+class ChainingUndefined(Undefined):
+    __slots__ = ()
+    _UndefTuple = namedtuple('_UndefTuple', UNDEFINED_FIELDS)  # type: ignore
+    _attrs = attrgetter(*[f'_undefined_{field}' for field in UNDEFINED_FIELDS])
+
+    def _replace(self, **kwargs: str) -> Self:
+        fields = self._UndefTuple(*self._attrs(self))
+        return self.__class__(*fields._replace(**kwargs))
+
+    def __getattr__(self, attr: str) -> Self:
+        return self._replace(name=f'{self._undefined_name}.{attr}')
+
+
 class JekyllTranslator(Extension):
     tags = {'comment'}
 
@@ -134,25 +168,36 @@ class JekyllTranslator(Extension):
         node.node = jinja2.nodes.Const.from_untrusted(None)
         return node
 
-    def preprocess(self, source: str, name: str | None=None, filename=None):
-        return (
-            re.sub(r'\bnil\b', 'None',
-            re.sub(r'\bfalse\b', 'False',
-            re.sub(r'\btrue\b', 'True',
-            source
-        ))))
+    #def preprocess(self, source: str, name: str | None=None, filename=None):
+        #pass
+        # return (
+        #     re.sub(r'\bnil\b', 'None',
+        #     re.sub(r'\bfalse\b', 'False',
+        #     re.sub(r'\btrue\b', 'True',
+        #     source
+        # ))))
 
     def filter_stream(self, stream: TokenStream) -> TokenStream | Iterable[Token]:
         debug = False
         args = False
-        token_type, token_value, lineno = None, None, 1
+        token_type, token_value, lineno = '', '', 1
         state: str | None = None
         block_idx = 0
         block_stack: list[list[str]] = []
         ns_vars = set()
 
+        name_map = {
+            'nil': 'None',
+            'true': 'True',
+            'false': 'False',
+        }
+        def transform(token: Token) -> Token:
+            if token.type == 'name' and token.value in name_map:
+                token._replace(value=name_map[token.value])
+            return token
+
         @contextmanager
-        def parse_state(new_state):
+        def parse_state(new_state: str) -> Iterator[None]:
             nonlocal state
             old_state = state
             state = new_state
@@ -164,7 +209,7 @@ class JekyllTranslator(Extension):
             nonlocal lineno, state, debug
             return sublexer.tokenize(s, lineno=lineno, state=state, debug=debug)
 
-        def tok(*args, **kwargs: Any) -> Token:
+        def tok(*args: Any, **kwargs: Any) -> Token:
             nonlocal token_type, token_value, lineno
             if args and isinstance(args[0], Token):
                 token = args[0]
@@ -174,8 +219,12 @@ class JekyllTranslator(Extension):
                 token = Token(lineno, *next(iter(kwargs.items())))
             else:
                 token = Token(lineno, token_type, token_value)
+            token = transform(token)
             if debug:
-                print(f'{stream.filename}:{lineno} - Token {token.type!r} {token.value!r}')
+                print(
+                    f'{stream.filename}:{lineno}'
+                    f'- Token {token.type!r} {token.value!r}'
+                )
             return current(token)
 
         def current(token: Token) -> Token:
@@ -201,14 +250,22 @@ class JekyllTranslator(Extension):
                     block_stack[-1].append(var)
                     yield tok(token)
                     had_colon = False
-                    while (token := next(stream)).type != lexer.TOKEN_BLOCK_END:
+                    while (token := current(next(stream))).type != lexer.TOKEN_BLOCK_END:
                         if token.type == 'colon':
                             had_colon = True
                             yield tok(lparen='(')
                         elif token.value == 'forloop':
                             yield tok(name='loop')
+                        elif token.value == 'limit':
+                            colon = next(stream)
+                            if colon.type != lexer.TOKEN_COLON:
+                                yield tok()
+                                yield tok(colon)
+                            count = current(stream.expect(lexer.TOKEN_INTEGER))
+                            with parse_state('block'):
+                                yield from tokenize(f'| limit({count.value})')
                         else:
-                            yield tok(token)
+                            yield tok()
                     if had_colon:
                         yield tok(rparen=')')
                     yield tok(token)
@@ -366,7 +423,7 @@ class JekyllTranslator(Extension):
                     continue
                 count = stream.expect(lexer.TOKEN_INTEGER)
                 with parse_state('block'):
-                    tokenize(f'| limit({count.value})')
+                    yield from tokenize(f'| limit({count.value})')
             elif token.value == ':':
                 args = True
                 yield tok(lparen='(')
@@ -420,17 +477,49 @@ def append(base: str | Path, to: str) -> Path | str:
     return str(base) + str(to)
 
 
-def date(dt: str | datetime, fmt: str) -> str:
+from .data import AutoDate
+def get_date(dt: str | date_only | datetime) -> datetime:
+    return AutoDate(dt)
+    dt = to_date_or_datetime(dt)
+    if isinstance(dt, date_only) or (dt.hour, dt.min, dt.second) == (0, 0, 0):
+        dt = datetime(*dt.timetuple()[:3]).replace(hour=18)
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def to_date_or_datetime(dt: str | date_only | datetime) -> datetime | date_only:
     if dt == 'now':
-        dt = datetime.now()
+        return datetime.now(timezone.utc)
     if isinstance(dt, str):
-        dt = datetime.fromisoformat(dt)
-    return dt.strftime(fmt)
+        try:
+            return date_only.fromisoformat(dt)
+        except ValueError:
+            return datetime.fromisoformat(str(dt))
+    return dt
+
+
+def autofmt_date(dt: datetime | date_only) -> str:
+    if not isinstance(dt, (datetime, date_only)):
+        return cast(str, dt)
+    datefmt, timefmt = '%Y-%m-%d', '%H:%M:%S %z'
+    if isinstance(dt, datetime):
+        return dt.strftime(datefmt + timefmt)
+    return dt.strftime(datefmt)
+
+
+def date(dt: str | datetime | date_only, fmt: str='auto') -> str:
+    try:
+        if fmt == 'auto':
+            return str(get_date(dt))
+            #return autofmt_date(to_date_or_datetime(dt))
+        return get_date(dt).datetime.strftime(fmt)
+        #return dt.datetime.strftime(fmt)
+    except TypeError:
+        return cast(str, dt)
 
 
 def size(it: object | None) -> int:
     try:
-        return len(it)
+        return len(cast(Sized, it))
     except TypeError:
         return 0
 
@@ -443,6 +532,8 @@ contains_re = re.compile(f'({arg_pattern}) contains ({arg_pattern})')
 
 @pass_context
 def where_exp(context: Context, iterable: Iterable[Any], var: str, expression: str) -> Iterable[Any]:
+    python_defs = {'nil': None, 'true': True, 'false': False}
+    template_vars = {**context.parent, **context.vars, **python_defs}
     def gen():
         environment = context.environment
         fixed = contains_re.sub(r'\2 in \1', expression)
@@ -450,7 +541,7 @@ def where_exp(context: Context, iterable: Iterable[Any], var: str, expression: s
         # print(f'where_exp {var}, {expression}')
         for item in iterable:
             try:
-                if condition(**{**context.parent, **context.vars, var: item}):
+                if condition(**{**template_vars, var: item}):
                     yield item
             except TypeError:
                 #print(context.get("site").pages)
@@ -462,18 +553,18 @@ def where_exp(context: Context, iterable: Iterable[Any], var: str, expression: s
 
 
 def sort_natural(iterable: Iterable[Any], sort_type: str) -> Iterable[Any]:
-    def get_date(it: Any):
-        if isinstance(it.date, datetime):
-            return it.date
-        return (
-            datetime(*it.date.timetuple()[:3])
-            .replace(hour=12, tzinfo=timezone(timedelta(hours=-6)))
-        )
     if sort_type == 'date':
-        key = get_date
+        key = lambda x: get_date(x.date)
+        #key = lambda x: x.date.datetime
+        #key = lambda x: get_date(x['date'])
     else:
         key = itemgetter(sort_type)
-    return sorted(iterable, key=key)
+        #key = lambda x: x[sort_type]
+    #iterable = [{key: item[key] for key in ('date', 'path', 'title')} for item in iterable]
+    sorted_it = sorted(iterable, key=key)
+    if not sorted_it:
+        return []
+    return sorted_it
 
 
 def number_of_words(s: str):
@@ -528,12 +619,72 @@ def limit(it: Iterable[T], count: int) -> Iterable[T]:
     return list(it)[:count]
 
 
-def last(it: Iterable[T]) -> T:
+@pass_environment
+def first(environment: Environment, it: Iterable[T]) -> T | Undefined:
     try:
-        return next(iter(reversed(it)))
-    except TypeError:
+        return ifirst(it)
+    except ValueError:
+        return environment.undefined('No first item, iterable was empty')
+
+
+@pass_environment
+def last(environment: Environment, it: Iterable[T]) -> T | Undefined:
+    try:
         return ilast(it)
+    except ValueError:
+        return environment.undefined('No last item, iterable was empty')
 
 
 def namespace_to_dict(ns: Namespace) -> dict[str, Any]:
     return {k: v for (k, v) in ns.items()}
+
+
+def plus(x: int | Undefined, y: int | Undefined) -> int | Undefined:
+    if isinstance(x, Undefined):
+        return x
+    if isinstance(y, Undefined):
+        return y
+    return int(x) + int(y)
+
+
+def minus(x: int | Undefined, y: int | Undefined) -> int | Undefined:
+    if isinstance(x, Undefined):
+        return x
+    if isinstance(y, Undefined):
+        return y
+    return int(x) - int(y)
+
+
+def default(x: T | Undefined, default: T) -> T:
+    if not isinstance(x, Undefined):
+        return x
+    return default
+
+
+@pass_context
+def absolute_url(context: Context, path: str) -> str:
+    url = context.resolve('page').url
+    if not url:
+        print(f'Unable to resolve url in context: {context.name}', file=sys.stderr)
+        return path
+    page_url = UrlPath(str(url))
+    try:
+        path_url = page_url >> path
+    except:
+        raise Exception(f'Error in {url} - page_url = {page_url} - path = {path}')
+    return path_url.as_absolute()
+
+
+@pass_context
+def relative_url(context: Context, path: str) -> str:
+    url = context.resolve('page').url
+    if not url:
+        print(f'Unable to resolve url in context: {context.name}', file=sys.stderr)
+        return path
+    page_url = UrlPath(str(url))
+    path_url = page_url >> path
+    return path_url.relative_to(page_url).path.lstrip('/')
+
+
+def reverse(it: Iterable[T]) -> Iterable[T]:
+    return reversed(list(it))
