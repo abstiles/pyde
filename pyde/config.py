@@ -59,6 +59,8 @@ class Config:
             self.output_dir, self.layouts_dir, self.includes_dir,
             self.config_file, *self.exclude
         ]))
+        if not self.drafts:
+            exclude_patterns.add('_drafts')
         excluded = set(flatmap(globber, exclude_patterns))
         excluded_dirs = set(f for f in excluded if isdir(f))
         included = set(flatmap(globber, set(['**', *self.include])))

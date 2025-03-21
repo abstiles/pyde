@@ -20,13 +20,14 @@ from .utils import ilen
 
 
 class Data(Mapping[str, Any]):
-    _d: dict[str, object]
+    _d: dict[str, Any]
 
     def __init__(
         self,
-        d: dict[str, object] | None=None,
+        d: dict[str, Any] | None=None,
+        /,
         _from: str | Undefined='',
-        **kwargs: object
+        **kwargs: Any
     ):
         super().__setattr__('_from', _from)
         super().__setattr__('_d', d or {})
@@ -99,7 +100,7 @@ class FileData:
     @property
     def type(self) -> str:
         """Get the file's type"""
-        return ''.join(self.path.suffixes).lstrip('.')
+        return ''.join(self.path.suffix).lstrip('.')
 
     @property
     def content(self) -> str:
@@ -117,38 +118,45 @@ class FileData:
             frontmatter = None
             is_binary = True
         has_frontmatter = frontmatter is not None
+        values = {**file.values, **parse_yaml_dict(frontmatter or '')}
         excerpt = ''
         word_count: None | int = None
-        if file.path.suffix == '.md':
-            basename = file.path.stem
-            try:
-                html = markdownify(get_content(file.path.read_text()))
-                excerpt = PARA_RE.search(html)[0]  # type: ignore [index]
-                word_count = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
-            except Exception:  # noqa
-                word_count = 0
-        else:
-            basename = file.path.name
 
+        suffix = ''
+        basename = file.path.name
+        if file.path.suffix == '.md':
+            word_count = 0
+            basename = file.path.stem
+            suffix = '.html'
+            if not values.get('skip'):
+                try:
+                    html = markdownify(get_content(file.path.read_text()))
+                    excerpt = PARA_RE.search(html)[0]  # type: ignore [index]
+                    word_count = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
+                except TypeError:  # noqa
+                    pass
         meta = Data(
             _from=f'File({file.path}).page',
             page=Data({
                 'word_count': word_count,
                 'excerpt': excerpt,
-                **file.values,
-                **parse_yaml_dict(frontmatter or ''),
+                **values,
             }, f'File({file.path}).page'),
+            **file.values,
             path=str(file.path.parent.relative_to(file.root)),
             basename=basename,
         )
         meta.title = meta.title or meta.basename
-        meta.file_path = get_path(meta)
-        full_url = root / UrlPath(meta.file_path)
+        file_path = get_path(meta)
+        full_url = root / UrlPath(file_path)
+        meta.file_path = Path(f'{file_path}{suffix}')
         url = full_url.dir if full_url.stem == 'index' else full_url
         meta.page.url = str(url)
         meta.page.path = url.path
         meta.page.dir = url.dir.path
         # A stupid hack
+        if meta.page.tags is None:
+            meta.page.tags = []
         if meta.page.links is None:
             meta.page.links = []
         if 'alt' not in meta.page:
