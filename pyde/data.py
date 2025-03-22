@@ -133,7 +133,7 @@ class FileData:
                     html = markdownify(get_content(file.path.read_text()))
                     excerpt = PARA_RE.search(html)[0]  # type: ignore [index]
                     word_count = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
-                except TypeError:  # noqa
+                except TypeError:
                     pass
         meta = Data(
             _from=f'File({file.path}).page',

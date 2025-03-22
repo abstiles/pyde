@@ -15,7 +15,10 @@ from .extensions.pm_attr_list import PMAttrListExtension
 
 
 def _extensions() -> list[Extension | str]:
-    return ['md_in_html', 'smarty', 'sane_lists', PMAttrListExtension(), BlockQuoteExtension()]
+    return [
+        'md_in_html', 'smarty', 'sane_lists', PMAttrListExtension(),
+        BlockQuoteExtension(),
+    ]
 
 
 def _ext_configs() -> dict[str, dict[str, Any]]:
@@ -110,7 +113,7 @@ WITHIN_BLOCK_ATTR_RE = re.compile(
     flags=re.MULTILINE
 )
 
-BACKSLASH_LT_RE = re.compile(r'^((?:[^\\]|\\\\|\\[^<])+)\\<', flags=re.MULTILINE)
+BACKSLASH_LT_RE = re.compile(r'(?<!\\)\\((?:\\{2})*)(?!\\)<')
 
 @dataclass
 class Markdown:
@@ -228,13 +231,7 @@ class HTMLCleaner(HTMLParser):
 
                 last = str(self.entities[idx - 1]) if idx > 0 else ''
                 nxt = str(self.entities[idx + 1]) if idx < (size - 1) else ''
-                extras_len = len(last) + len(nxt)
                 snippet = f'{last}{entity}{nxt}'
-                #          '<last>sometext<nxt>'
-                # len(last) = 6
-                # len(next) = 5
-                # len(entity) = 8
-                # len(snippet) = 19
                 clean_text = Markdown.clean(snippet)
                 text_only = clean_text[len(last):len(snippet) - len(nxt)]
                 self.write(text_only)

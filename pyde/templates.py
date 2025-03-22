@@ -2,13 +2,14 @@
 
 import re
 import sys
-from collections.abc import Callable, Iterator, Iterable, Mapping, Sequence, Sized
 from collections import namedtuple
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from contextlib import contextmanager
-from datetime import date as date_only, datetime, timezone
-from operator import itemgetter, attrgetter
+from datetime import date as date_only
+from datetime import datetime, timezone
+from operator import attrgetter, itemgetter
 from pathlib import Path
-from typing import Any, Self, TypeVar, cast
+from typing import Any, Self, TypeVar, cast, overload
 
 import jinja2
 from jinja2 import BaseLoader, Environment
@@ -20,15 +21,19 @@ from jinja2.runtime import Context, Undefined
 from jinja2.utils import Namespace
 
 from .config import Config
+from .data import AutoDate, Data
 from .markdown import markdownify
-from .utils import first as ifirst, last as ilast, prepend
-from .data import Data
 from .url import UrlPath
+from .utils import first as ifirst
+from .utils import last as ilast
+from .utils import prepend
+
+T = TypeVar('T')
 
 
 class Template:
     def __init__(
-        self, url: str, includes_dir: Path, templates_dir: Path, globals: Data,
+        self, url: UrlPath, includes_dir: Path, templates_dir: Path, pyde: Data,
     ):
         self.env = Environment(
             loader=TemplateLoader(templates_dir),
@@ -40,8 +45,9 @@ class Template:
             extensions=[JekyllTranslator, 'jinja2.ext.loopcontrols'],
         )
         self.env.globals["includes"] = Namespace()
-        self.env.globals["pyde"] = globals
-        self.env.globals["jekyll"] = globals
+        self.env.globals["pyde"] = pyde
+        self.env.globals["jekyll"] = pyde
+        self.env.globals["url"] = url
         self.env.extend(
             pyde_includes_dir=includes_dir,
             pyde_templates_dir=templates_dir
@@ -63,18 +69,17 @@ class Template:
         self.env.filters['plus'] = plus
         self.env.filters['minus'] = minus
         self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
-        #self.env.filters['absolute_url'] = lambda x: url.rstrip('/') + '/' + x.lstrip('/')
         self.env.filters['absolute_url'] = absolute_url
         self.env.filters['relative_url'] = relative_url
         self.env.filters['reverse'] = reverse
 
     @classmethod
     def from_config(cls, config: Config) -> 'Template':
-        globals = Data(
+        pyde = Data(
             drafts=config.drafts,
             environment="development" if config.drafts else "production"
         )
-        return cls(config.url, config.includes_dir, config.layouts_dir, globals)
+        return cls(config.url, config.includes_dir, config.layouts_dir, pyde)
 
     def get_template(self, name: str) -> JinjaTemplate:
         return self.env.get_template(name)
@@ -94,8 +99,7 @@ class Template:
                     f"Invalid template syntax at {orig.filename}:{orig.lineno}",
                     str(orig), orig.source
                 ) from exc
-            else:
-                raise TemplateError("Template error", exc.message) from exc
+            raise TemplateError("Template error", exc.message) from exc
 
     def render(self, source: str, data: dict[str, object]) -> str:
         try:
@@ -112,8 +116,7 @@ class Template:
                     f"Invalid template syntax at {orig.filename}:{orig.lineno}",
                     str(orig), orig.source
                 ) from exc
-            else:
-                raise TemplateError("Template error", exc.message) from exc
+            raise TemplateError("Template error", exc.message) from exc
 
 
 class TemplateError(ValueError):
@@ -136,10 +139,8 @@ class TemplateLoader(BaseLoader):
             path = self.templates_dir / template
         if path.is_file():
             mtime = path.stat().st_mtime
-            source = path.read_text()
+            source = path.read_text('utf8')
             return source, str(path), lambda: mtime == path.stat().st_mtime
-        elif template.startswith('_includes'):
-            return '', '', lambda: True
         return '{{ content }}', "", lambda: True
 
 
@@ -168,16 +169,9 @@ class JekyllTranslator(Extension):
         node.node = jinja2.nodes.Const.from_untrusted(None)
         return node
 
-    #def preprocess(self, source: str, name: str | None=None, filename=None):
-        #pass
-        # return (
-        #     re.sub(r'\bnil\b', 'None',
-        #     re.sub(r'\bfalse\b', 'False',
-        #     re.sub(r'\btrue\b', 'True',
-        #     source
-        # ))))
-
-    def filter_stream(self, stream: TokenStream) -> TokenStream | Iterable[Token]:
+    # This function is a nightmare horror. I intend for it to be a temporary
+    # shim until I'm fully beyond Jekyll.
+    def filter_stream(self, stream: TokenStream) -> Iterable[Token]:  # pylint: disable=all
         debug = False
         args = False
         token_type, token_value, lineno = '', '', 1
@@ -197,7 +191,7 @@ class JekyllTranslator(Extension):
             return token
 
         @contextmanager
-        def parse_state(new_state: str) -> Iterator[None]:
+        def parse_state(new_state: str | None) -> Iterator[None]:
             nonlocal state
             old_state = state
             state = new_state
@@ -236,10 +230,8 @@ class JekyllTranslator(Extension):
             return tok(next(stream))
 
         if stream.name:
-            debug = True
             yield from tokenize('{% set ns = namespace() %}')
         for token in map(current, stream):
-            debug = True
             state = None
             if (token.type, token.value) == ("name", "assign"):
                 yield tok('set')
@@ -283,8 +275,6 @@ class JekyllTranslator(Extension):
                 yield tok(comma=',')
                 yield tok(string='equalto')
             elif (token.type, token.value) == ("name", "include"):
-                print(f'NEW INCLUDE: {token.lineno} ({lineno})')
-                debug = True
                 # Transform an include statement with arguments into a
                 # with/include pair. Given:
                 #     {% include f.html a=b x=y %}
@@ -302,12 +292,10 @@ class JekyllTranslator(Extension):
 
                 # First check if this is a namespace reference.
                 next_token = next(stream)
-                print(f'next_token: {token.lineno} ({lineno})')
                 if next_token.type == 'dot':
                     yield tok(name='includes')
                     yield tok(next_token)
                     yield passthrough()
-                    debug = False
                     continue
 
                 # We know this is an include statement. Replace the token we
@@ -351,7 +339,6 @@ class JekyllTranslator(Extension):
                 # If there are assignments, emit the 'with' block, followed by
                 # the assignments
                 if assignments:
-                    print(f'assignments: {block_end.lineno} ({lineno})')
                     if has_nested_include_refs:
                         yield from tokenize('with _old_includes = includes %}{%')
                     yield from tokenize('with includes = namespace() %}')
@@ -367,10 +354,9 @@ class JekyllTranslator(Extension):
                 yield from tokenize(f'include "{path}" %}}')
                 state = None
                 if assignments:
-                   yield from tokenize('{% endwith %}')
-                   if has_nested_include_refs:
+                    yield from tokenize('{% endwith %}')
+                    if has_nested_include_refs:
                         yield from tokenize('{% endwith %}')
-                debug = False
             elif token.type == "dot":
                 next_token = next(stream)
                 if next_token.value == 'size':
@@ -390,12 +376,8 @@ class JekyllTranslator(Extension):
                 block, *vars = block_stack.pop()
                 vars = set(vars)
                 with parse_state('block'):
-                    #for var in ns_vars:
-                    #    yield from tokenize(f'set {block}.{var} = {var} %}}{{%')
                     yield tok()
                     yield tok(stream.expect(lexer.TOKEN_BLOCK_END))
-                # for var in vars:
-                #     yield from tokenize(f'{{% set {var} = {block}.{var} %}}')
                 for var in ns_vars:
                     yield from tokenize(f'{{% set {var} = ns.{var} %}}')
             elif (token.type, token.value) == ("name", "capture"):
@@ -455,11 +437,14 @@ class Sublexer:
         source: str,
         lineno: int=1,
         state: str | None=None,
-        debug=False,
+        debug: bool=False,
     ) -> Iterable[Token]:
         for token in self.lexer.tokenize(source, self.name, self.filename, state):
             if debug:
-                print(f'{self.filename}:{token.lineno+lineno-1} - Token {token.type!r} {token.value!r}')
+                print(
+                    f'{self.filename}:{token.lineno+lineno-1}'
+                    f'- Token {token.type!r} {token.value!r}'
+                )
             yield Token(token.lineno + lineno - 1, token.type, token.value)
 
 
@@ -477,13 +462,12 @@ def append(base: str | Path, to: str) -> Path | str:
     return str(base) + str(to)
 
 
-from .data import AutoDate
-def get_date(dt: str | date_only | datetime) -> datetime:
-    return AutoDate(dt)
-    dt = to_date_or_datetime(dt)
-    if isinstance(dt, date_only) or (dt.hour, dt.min, dt.second) == (0, 0, 0):
-        dt = datetime(*dt.timetuple()[:3]).replace(hour=18)
-    return dt.replace(tzinfo=timezone.utc)
+def get_date(dt: str | date_only | datetime) -> AutoDate:
+    try:
+        dt = cast(date_only, dt)
+        return AutoDate(dt.isoformat())
+    except AttributeError:
+        return AutoDate(str(dt))
 
 
 def to_date_or_datetime(dt: str | date_only | datetime) -> datetime | date_only:
@@ -524,94 +508,87 @@ def size(it: object | None) -> int:
         return 0
 
 
-name_pattern = r'[\w.]+'
-string_pattern = r'"[^"]*"' "|" r"'[^']*'"
-arg_pattern = f'{name_pattern}|{string_pattern}'
+NAME_PATTERN = r'[\w.]+'
+STRING_PATTERN = r'"[^"]*"' + "|" + r"'[^']*'"
+ARG_PATTERN = f'{NAME_PATTERN}|{STRING_PATTERN}'
 
-contains_re = re.compile(f'({arg_pattern}) contains ({arg_pattern})')
+contains_re = re.compile(f'({ARG_PATTERN}) contains ({ARG_PATTERN})')
 
 @pass_context
-def where_exp(context: Context, iterable: Iterable[Any], var: str, expression: str) -> Iterable[Any]:
+def where_exp(
+    context: Context, iterable: Iterable[T], var: str, expression: str,
+) -> Iterable[T]:
     python_defs = {'nil': None, 'true': True, 'false': False}
     template_vars = {**context.parent, **context.vars, **python_defs}
-    def gen():
+    def gen() -> Iterable[T]:
         environment = context.environment
         fixed = contains_re.sub(r'\2 in \1', expression)
         condition = environment.compile_expression(fixed)
-        # print(f'where_exp {var}, {expression}')
         for item in iterable:
             try:
                 if condition(**{**template_vars, var: item}):
                     yield item
             except TypeError:
-                #print(context.get("site").pages)
-                #print(context.vars)
-                #print(f'where_exp {var}, {expression}')
-                #print(item)
                 pass
     return [*gen()]
 
 
 def sort_natural(iterable: Iterable[Any], sort_type: str) -> Iterable[Any]:
+    key: Callable[[Any], Any]
     if sort_type == 'date':
         key = lambda x: get_date(x.date)
-        #key = lambda x: x.date.datetime
-        #key = lambda x: get_date(x['date'])
     else:
         key = itemgetter(sort_type)
-        #key = lambda x: x[sort_type]
-    #iterable = [{key: item[key] for key in ('date', 'path', 'title')} for item in iterable]
     sorted_it = sorted(iterable, key=key)
-    if not sorted_it:
-        return []
     return sorted_it
 
 
-def number_of_words(s: str):
+def number_of_words(s: str) -> int:
     try:
         return len(s.split())
-    except:
+    except (AttributeError, TypeError):
         return 0
 
 
-def real_slice(iterable: Iterable[Any], offset: int, limit: int) -> Any:
+def real_slice(iterable: Iterable[T], offset: int, limit: int) -> Sequence[T]:
     try:
+        iterable = cast(Sequence[T], iterable)
         return iterable[offset:offset+limit]
     except TypeError:
         return list(iterable)[offset:offset+limit]
 
-def index(iterable: Iterable[Any], idx: int) -> Any:
+def index(iterable: Iterable[T], idx: int) -> T:
     try:
+        iterable = cast(Sequence[T], iterable)
         return iterable[idx]
     except TypeError:
         return list(iterable)[idx]
 
-T = TypeVar('T')
 
+@overload
+def debug(context: Context, it: Undefined, *labels: str) -> Undefined: ...
+@overload
+def debug(context: Context, it: Iterable[T], *labels: str) -> Iterable[T]: ...
 @pass_context
-def debug(context: Context, it: T, *labels: str) -> T:
+def debug(context: Context, it: T, *labels: str) -> T | Undefined | Iterable[T]:
     name = context.name
     label = ' '.join(map(str, labels))
     print(f'DEBUGGING {name}{f" - {label}" if label else ""}')
     if isinstance(it, jinja2.runtime.Undefined):
         print(f'DEBUG {name}: {label} = Undefined')
-        if 'seriesIdx' in label:
-            print(f'Looking up ns in the context: {context.resolve("ns")}')
-            print(f'Looking up seriesIdx in the context: {context.resolve("seriesIdx")}')
-        return it
     elif isinstance(it, Mapping):
-        for key, item in dict(**it).items():
+        for key, item in {**it}.items():
             print(f'DEBUG {name}: {label}[{key}] = {item!r}')
-        return it
     elif isinstance(it, Iterable) and type(it) not in (str, bytes):
-        def log_all() -> T:
+        def log_all() -> Iterable[T]:
             idx = 0
             for idx, item in enumerate(it, start=1):
                 print(f'DEBUG {name}: {label}[{idx-1}] = {item!r}')
                 yield item
             print(f'DEBUG {name}: len({label}) = {idx}{"" if idx else f" ({it!r})"}')
         return [*log_all()]
-    print(f'DEBUG {name}: {label} = {it!r}')
+    else:
+        print(f'DEBUG {name}: {label} = {it!r}')
     return it
 
 
@@ -636,7 +613,7 @@ def last(environment: Environment, it: Iterable[T]) -> T | Undefined:
 
 
 def namespace_to_dict(ns: Namespace) -> dict[str, Any]:
-    return {k: v for (k, v) in ns.items()}
+    return dict(ns.items())
 
 
 def plus(x: int | Undefined, y: int | Undefined) -> int | Undefined:
@@ -662,16 +639,18 @@ def default(x: T | Undefined, default: T) -> T:
 
 
 @pass_context
-def absolute_url(context: Context, path: str) -> str:
+def absolute_url(context: Context, path: str) -> UrlPath:
     url = context.resolve('page').url
     if not url:
         print(f'Unable to resolve url in context: {context.name}', file=sys.stderr)
-        return path
+        return UrlPath(path)
     page_url = UrlPath(str(url))
     try:
         path_url = page_url >> path
-    except:
-        raise Exception(f'Error in {url} - page_url = {page_url} - path = {path}')
+    except Exception as exc:
+        raise Exception(
+            f'Error in {url} - page_url = {page_url} - path = {path}'
+        ) from exc
     return path_url.as_absolute()
 
 

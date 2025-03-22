@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import collections.abc
 from collections.abc import Sequence, Mapping, Iterable, Iterator
-from functools import reduce
 from itertools import chain
 from os import PathLike
 from pathlib import PurePosixPath

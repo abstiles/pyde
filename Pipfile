@@ -15,6 +15,7 @@ ruff = "*"
 types-pyyaml = "*"
 ipython = "*"
 pytest = "*"
+types-markdown = "*"
 
 [requires]
 python_version = "3.11"
