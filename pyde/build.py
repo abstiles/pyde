@@ -10,13 +10,12 @@ from itertools import dropwhile
 from .config import Config
 from .data import Data, FileData
 from .markdown import markdownify
-from .templates import Template, TemplateError
+from .templates import TemplateManager, TemplateError
 
 
 def build_site(config: Config) -> None:
     """Build the site"""
-    template = Template.from_config(config)
-    #files = [*map(FileData.load, config.iter_files())]
+    template = TemplateManager.from_config(config)
     files = [*FileData.iter_files(config)]
     site = Data(pages=[file.meta.page for file in files if file.type == "md"],
                 url=config.url)

@@ -40,7 +40,7 @@ class SourceFile:
 @dataclass
 class Config:
     """Model of the config values in the config file"""
-    config_file: Path
+    config_file: Path | None = None
     url: UrlPath = UrlPath('/')
     root: Path = Path('.')
     drafts: bool = False
@@ -51,13 +51,15 @@ class Config:
     defaults: list[dict[str,dict[str,str]]] = field(default_factory=list)
     layouts_dir: Path = Path('_layouts')
     includes_dir: Path = Path('_includes')
+    drafts_dir: Path = Path('_drafts')
 
     def iter_files(self) -> Iterable[SourceFile]:
         """Iterate through all files included in the build"""
         globber = partial(iterglob, root=self.root)
         exclude_patterns = set(map(str, [
             self.output_dir, self.layouts_dir, self.includes_dir,
-            self.config_file, *self.exclude
+            *([self.config_file] if self.config_file else []),
+            *self.exclude
         ]))
         if not self.drafts:
             exclude_patterns.add('_drafts')

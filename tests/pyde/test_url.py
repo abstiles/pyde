@@ -51,8 +51,8 @@ def test_path(url_path: Fixture[UrlPath], path: str) -> None:
     ("/path/to/file.html", None,),
     ("", None,),
 )
-def test_domain(url_path: Fixture[UrlPath], domain: str | None) -> None:
-    assert url_path.domain == domain
+def test_host(url_path: Fixture[UrlPath], host: str | None) -> None:
+    assert url_path.host == host
 
 
 @parametrize(

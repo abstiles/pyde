@@ -419,14 +419,17 @@ disable = [
     "no-member",  # Pylint doesn't understand NewType
     "not-an-iterable", # Pylint is bad at this compared to mypy
     "redefined-outer-name",  # Shadowing variables is fine, actually
+    "redefined-builtin",  # Shadowing builtins too
     "unnecessary-lambda-assignment",  # Oh, shut the fuck up
     "too-many-arguments",  # You cannot decide this programmatically
     "too-many-instance-attributes",  # Wow, really?
     "too-few-public-methods",  # I genuinely hate you
     "too-many-locals",  # Intermediate variables are good, actually
+    "self-cls-assignment",  # And yet it's used in the standard library, curious
     "missing-function-docstring",  # These are great when I'm later in the
     "missing-class-docstring",     # process but for now they're just irksome
     "missing-module-docstring",    # while I'm rapidly iterating.
+    "invalid-name",
     "raw-checker-failed",
     "bad-inline-option",
     "locally-disabled",

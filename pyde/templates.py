@@ -12,9 +12,15 @@ from pathlib import Path
 from typing import Any, Self, TypeVar, cast, overload
 
 import jinja2
-from jinja2 import BaseLoader, Environment
-from jinja2 import Template as JinjaTemplate
-from jinja2 import lexer, pass_context, pass_environment, select_autoescape
+from jinja2 import (
+    BaseLoader,
+    Environment,
+    Template,
+    lexer,
+    pass_context,
+    pass_environment,
+    select_autoescape,
+)
 from jinja2.ext import Extension
 from jinja2.lexer import Lexer, Token, TokenStream
 from jinja2.runtime import Context, Undefined
@@ -31,7 +37,7 @@ from .utils import prepend
 T = TypeVar('T')
 
 
-class Template:
+class TemplateManager:
     def __init__(
         self, url: UrlPath, includes_dir: Path, templates_dir: Path, pyde: Data,
     ):
@@ -74,15 +80,15 @@ class Template:
         self.env.filters['reverse'] = reverse
 
     @classmethod
-    def from_config(cls, config: Config) -> 'Template':
+    def from_config(cls, config: Config) -> 'TemplateManager':
         pyde = Data(
             drafts=config.drafts,
             environment="development" if config.drafts else "production"
         )
         return cls(config.url, config.includes_dir, config.layouts_dir, pyde)
 
-    def get_template(self, name: str) -> JinjaTemplate:
-        return self.env.get_template(name)
+    def get_template(self, template: str | Path, **globals: Any) -> Template:
+        return self.env.get_template(str(template), globals=globals)
 
     def apply(self, template: str, data: dict[str, object]) -> str:
         try:
@@ -135,13 +141,18 @@ class TemplateLoader(BaseLoader):
     ) -> tuple[str, str | None, Callable[[], bool] | None]:
         if template.startswith('_includes'):
             path = Path(template)
+            if not path.is_file():
+                include_name = path.relative_to('_includes')
+                raise ValueError('Cannot find template {include_name} to include')
+        elif (path_by_name := self.templates_dir / template).is_file():
+            path = path_by_name
+        elif (exact_path := Path(template)).is_file():
+            path = exact_path
         else:
-            path = self.templates_dir / template
-        if path.is_file():
-            mtime = path.stat().st_mtime
-            source = path.read_text('utf8')
-            return source, str(path), lambda: mtime == path.stat().st_mtime
-        return '{{ content }}', "", lambda: True
+            return '{{ content }}', "", lambda: True
+        mtime = path.stat().st_mtime
+        source = path.read_text('utf8')
+        return source, str(path), lambda: mtime == path.stat().st_mtime
 
 
 UNDEFINED_FIELDS = ('hint', 'obj', 'name', 'exception')
