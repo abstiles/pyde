@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 import shutil
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AnyStr, Protocol, Type, cast
+from typing import TYPE_CHECKING, Any, AnyStr, ClassVar, Protocol, Self, Type, cast
 
 from jinja2 import Template
 
@@ -32,6 +33,7 @@ class TransformerType(Protocol):
 class Transformer:
     __slots__ = ('_source',)
     _source: Path
+    registered: ClassVar[list[TransformerRegistration]] = []  # pylint: disable=declare-non-slot
 
     def __new__(
         cls,
@@ -44,8 +46,9 @@ class Transformer:
         _ = source, permalink, meta
         if cls is Transformer:
             transformers: list[type] = []
-            if source.suffix == '.md':
-                transformers.append(MarkdownTransformer)
+            for registration in cls.registered:
+                if registration.wants(source):
+                    transformers.append(registration.transformer)
             if template is not None:
                 transformers.append(TemplateTransformer)
             transformers.append(CopyTransformer)
@@ -56,6 +59,26 @@ class Transformer:
                 )
             cls = transformers[0]
         return super().__new__(cls)
+
+    def __init_subclass__(cls, /, pattern: str='', **kwargs: Any):
+        super().__init_subclass__(**kwargs)
+        if pattern:
+            Transformer.register(cls, Transformer._pattern_matcher(pattern))
+
+    @staticmethod
+    def _pattern_matcher(pattern: str) -> Callable[[Path], bool]:
+        def matcher(path: Path) -> bool:
+            return path.match(pattern)
+        return matcher
+
+    @classmethod
+    def register(
+        cls,
+        transformer: Type[Transformer],
+        wants: Callable[[Path], bool],
+    ) -> Type[Self]:
+        cls.registered.append(TransformerRegistration(transformer, wants))
+        return cls
 
     @property
     def source(self) -> Path:
@@ -68,6 +91,13 @@ class Transformer:
             _ = root
         def transform(self, data: AnyStr) -> str | bytes:
             return data
+
+
+@dataclass(frozen=True)
+class TransformerRegistration:
+    transformer: Type[Transformer]
+    wants: Callable[[Path], bool]
+
 
 class BaseTransformer(Transformer, TransformerType):
     __slots__ = ()
@@ -193,7 +223,7 @@ class TextTransformer(BaseTransformer, ABC):
     def transform_text(self, text: str) -> str: ...
 
 
-class MarkdownTransformer(TextTransformer):
+class MarkdownTransformer(TextTransformer, pattern='*.md'):
     """Transform markdown to HTML"""
 
     def transformed_name(self) -> str:
