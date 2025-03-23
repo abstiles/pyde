@@ -14,6 +14,7 @@ from .markdown import markdownify
 
 TO_FORMAT_STR_RE = re.compile(r':(\w+)')
 DEFAULT_PERMALINK = '/:path/:name'
+UNSET: Any = object()
 
 
 class TransformerType(Protocol):
@@ -27,7 +28,7 @@ class TransformerType(Protocol):
 
     def transform_file(self, root: Path) -> None: ...
 
-    def pipe(self, template: Template | None=None, **meta: Any) -> Transformer: ...
+    def pipe(self, **meta: Any) -> Transformer: ...
 
 
 class Transformer:
@@ -50,7 +51,7 @@ class Transformer:
                 if registration.wants(source):
                     transformers.append(registration.transformer)
             if template is not None:
-                transformers.append(TemplateTransformer)
+                transformers.append(TemplateApplyTransformer)
             transformers.append(CopyTransformer)
             if len(transformers) > 1:
                 return PipelineTransformer.build(
@@ -91,6 +92,9 @@ class Transformer:
             _ = root
         def transform(self, data: AnyStr) -> str | bytes:
             return data
+        def pipe(self, **meta: Any) -> Transformer:
+            _ = meta
+            return self
 
 
 @dataclass(frozen=True)
@@ -134,8 +138,8 @@ class BaseTransformer(Transformer, TransformerType):
         else:
             output.write_text(data)
 
-    def pipe(self, template: Template | None=None, **meta: Any) -> Transformer:
-        next = Transformer(self.outputs, template=template, **meta)
+    def pipe(self, **meta: Any) -> Transformer:
+        next = Transformer(self.outputs, **meta)
         return PipelineTransformer(
             self.source, pipeline=[self, next],
         )
@@ -158,6 +162,20 @@ class PipelineTransformer(BaseTransformer):
         args = ', '.join(map(repr, self._pipeline))
         return f'{self.__class__.__name__}({args})'
 
+    def __init__(
+        self, source: Path, /, *,
+        pipeline: Sequence[Transformer]=UNSET,
+        **meta: Any
+    ):
+        super().__init__(source, **meta)
+        if pipeline is not UNSET:
+            self._pipeline = pipeline
+        try:
+            # This should be set either through init or the build classmethod.
+            self._pipeline
+        except AttributeError:
+            self._pipeline = ()
+
     @classmethod
     def build(
         cls,
@@ -172,7 +190,7 @@ class PipelineTransformer(BaseTransformer):
             transformer = transformer_type(input, **meta)
             input = transformer.outputs
             tfs.append(transformer)
-        new_pipeline = cls(source, **meta)
+        new_pipeline = cls(source, pipeline=tfs)
         new_pipeline._pipeline = tfs
         return new_pipeline
 
@@ -233,7 +251,7 @@ class MarkdownTransformer(TextTransformer, pattern='*.md'):
         return markdownify(text)
 
 
-class TemplateTransformer(TextTransformer):
+class TemplateApplyTransformer(TextTransformer):
     """Apply a Jinja2 Template to a text file"""
 
     def __init__(
