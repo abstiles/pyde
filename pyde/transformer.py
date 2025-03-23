@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, AnyStr, ClassVar, Protocol, Self, Type, c
 from jinja2 import Template
 
 from .markdown import markdownify
+from .yaml import parse_yaml_dict
 
 TO_FORMAT_STR_RE = re.compile(r':(\w+)')
 DEFAULT_PERMALINK = '/:path/:name'
@@ -26,9 +27,28 @@ class TransformerType(Protocol):
 
     def transform(self, data: AnyStr) -> str | bytes: ...
 
-    def transform_file(self, root: Path) -> None: ...
+    def transform_from_file(self, src_root: Path) -> str | bytes:
+        input = src_root / self.source
+        data = input.read_bytes()
+        return self.transform(data)
+
+    def transform_to_file(self, data: AnyStr, dest_root: Path) -> Path:
+        output = dest_root / self.outputs
+        transformed = self.transform(data)  # pylint: disable=assignment-from-no-return
+        if isinstance(transformed, bytes):
+            output.write_bytes(transformed)
+        else:
+            output.write_text(transformed)
+        return output
+
+    def transform_file(self, src_root: Path, dest_root: Path) -> Path:
+        data = cast(bytes, self.transform_from_file(src_root))
+        return self.transform_to_file(data, dest_root)
 
     def pipe(self, **meta: Any) -> Transformer: ...
+
+    @property
+    def metadata(self) -> dict[str, Any]: ...
 
 
 class Transformer:
@@ -42,11 +62,14 @@ class Transformer:
         /, *,
         permalink: str=DEFAULT_PERMALINK,
         template: Template | None=None,
+        metaprocessor: MetaProcessor | None=None,
         **meta: Any,
     ) -> Transformer:
         _ = source, permalink, meta
         if cls is Transformer:
             transformers: list[type] = []
+            if metaprocessor:
+                transformers.append(MetaTransformer)
             for registration in cls.registered:
                 if registration.wants(source):
                     transformers.append(registration.transformer)
@@ -56,7 +79,8 @@ class Transformer:
             if len(transformers) > 1:
                 return PipelineTransformer.build(
                     source, permalink=permalink, template=template,
-                    transformers=transformers, **meta,
+                    transformers=transformers, metaprocessor=metaprocessor,
+                    **meta,
                 )
             cls = transformers[0]
         return super().__new__(cls)
@@ -65,6 +89,9 @@ class Transformer:
         super().__init_subclass__(**kwargs)
         if pattern:
             Transformer.register(cls, Transformer._pattern_matcher(pattern))
+        elif matcher := getattr(cls, f'__{cls.__name__}_match_path', None):
+            Transformer.register(cls, matcher)
+
 
     @staticmethod
     def _pattern_matcher(pattern: str) -> Callable[[Path], bool]:
@@ -88,13 +115,17 @@ class Transformer:
     if TYPE_CHECKING:
         @property
         def outputs(self) -> Path: ...
-        def transform_file(self, root: Path) -> None:
-            _ = root
+        def transform_file(self, src_root: Path, dest_root: Path) -> Path:
+            _ = src_root, dest_root
+            return dest_root
         def transform(self, data: AnyStr) -> str | bytes:
             return data
         def pipe(self, **meta: Any) -> Transformer:
             _ = meta
             return self
+        @property
+        def metadata(self) -> dict[str, Any]:
+            return {}
 
 
 @dataclass(frozen=True)
@@ -104,16 +135,18 @@ class TransformerRegistration:
 
 
 class BaseTransformer(Transformer, TransformerType):
-    __slots__ = ()
+    __slots__ = ('_meta',)
+    _meta: dict[str, Any]
 
     def __init__(
         self,
         source: Path,
-        /, **meta: Any,
+        /, **kwargs: Any,
     ):
         super().__init__()
-        _ = meta
+        _ = kwargs
         self._source = source
+        self._meta = {}
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}({str(self.source)!r})'
@@ -128,15 +161,9 @@ class BaseTransformer(Transformer, TransformerType):
     def outputs(self) -> Path:
         return self.get_output_path()
 
-    def transform_file(self, root: Path) -> None:
-        input = root / self.source
-        output = root / self.outputs
-        text = input.read_text('utf8')
-        data = self.transform(text)
-        if isinstance(data, bytes):
-            output.write_bytes(data)
-        else:
-            output.write_text(data)
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._meta
 
     def pipe(self, **meta: Any) -> Transformer:
         next = Transformer(self.outputs, **meta)
@@ -154,8 +181,11 @@ class PipelineTransformer(BaseTransformer):
 
     def transform(self, data: AnyStr) -> str | bytes:
         current_data: str | bytes = data
+        metadata: dict[str, Any] = {}
         for pipe in self._pipeline:
+            pipe.metadata.update(metadata)
             current_data = pipe.transform(cast(AnyStr, current_data))
+            metadata = pipe.metadata
         return current_data
 
     def __repr__(self) -> str:
@@ -214,8 +244,11 @@ class CopyTransformer(BaseTransformer):
             f' permalink={self._permalink!r})'
         )
 
-    def transform_file(self, root: Path) -> None:
-        shutil.copy(self.source, self.outputs)
+    def transform_file(self, src_root: Path, dest_root: Path) -> Path:
+        in_path = src_root / self.source
+        out_path = dest_root / self.outputs
+        shutil.copy(in_path, out_path)
+        return out_path
 
     def transform(self, data: AnyStr) -> AnyStr:
         return data
@@ -254,16 +287,50 @@ class MarkdownTransformer(TextTransformer, pattern='*.md'):
 class TemplateApplyTransformer(TextTransformer):
     """Apply a Jinja2 Template to a text file"""
 
-    def __init__(
-        self,
-        source: Path,
-        /, *,
-        template: Template,
-        **meta: Any
-    ):
+    def __init__(self, source: Path, /, *, template: Template, **meta: Any):
         super().__init__(source)
         self._template = template
         self._meta = meta
 
     def transform_text(self, text: str) -> str:
         return self._template.render(content=text, **self._meta)
+
+
+class MetaProcessor(Protocol):
+    def __call__(
+        self,
+        source: str | bytes | Path,
+        **metadata: Any,
+    ) -> str: ...
+
+
+class MetaTransformer(TextTransformer):
+    @classmethod
+    def __match_path(cls, path: Path) -> bool:  # pylint: disable=unused-private-member
+        return bool(path)
+
+    def __init__(
+        self, source: Path, /,
+        metaprocessor: MetaProcessor,
+        **meta: Any,
+    ):
+        super().__init__(source, **meta)
+        self._processor = metaprocessor
+        self._meta: dict[str, Any] = {}
+
+    def transform_text(self, text: str) -> str:
+        frontmatter, content = self.split_frontmatter(text)
+        self._meta.update(
+            parse_yaml_dict(frontmatter) if frontmatter else {}
+        )
+        return self._processor(content, **self._meta)
+
+    @staticmethod
+    def split_frontmatter(text: str) -> tuple[str | None, str]:
+        """Split a file into the frontmatter and text file components"""
+        if not text.startswith("---\n"):
+            return None, text
+        end = text.find("\n---\n", 3)
+        frontmatter = text[4:end]
+        text = text[end + 5:]
+        return frontmatter, text
