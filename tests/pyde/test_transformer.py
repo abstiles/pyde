@@ -17,7 +17,7 @@ def test_default_transform() -> None:
 
 def test_permalink_transform() -> None:
     path = Path('path/to/input.ext')
-    tf = Transformer(path, permalink='/new_root/:path/:name')
+    tf = Transformer(path, permalink='/new_root/:path/:basename')
 
     assert tf.outputs == Path('new_root/path/to/input.ext')
 

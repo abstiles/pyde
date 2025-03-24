@@ -8,20 +8,26 @@ from pyde.utils import dict_to_dataclass
 TEST_DATA_DIR = Path(__file__).parent / 'test_data'
 
 def get_config(**kwargs: Any) -> Config:
-    return dict_to_dataclass(Config, dict(
-        root=TEST_DATA_DIR,
-        layouts_dir=TEST_DATA_DIR / '_layouts',
-        includes_dir=TEST_DATA_DIR / '_includes',
-        drafts_dir=TEST_DATA_DIR / '_drafts',
-        output_dir=TEST_DATA_DIR / '_site',
-        permalink='/:path/:name',
-        defaults=[
-            {'values': {'layout': 'default'}},
-            {'scope': {'path': 'posts'}, 'values': {'layout': 'post'}},
-            {'scope': {'path': '_drafts'}, 'values': {'permalink': '/drafts/:title:ext'}},
-        ],
-        **kwargs,
-    ))
+    return dict_to_dataclass(
+        Config,
+        {
+            'root': TEST_DATA_DIR,
+            'layouts_dir': TEST_DATA_DIR / '_layouts',
+            'includes_dir': TEST_DATA_DIR / '_includes',
+            'drafts_dir': TEST_DATA_DIR / '_drafts',
+            'output_dir': TEST_DATA_DIR / '_site',
+            'permalink': '/:path/:name',
+            'defaults': [
+                {'values': {'layout': 'default'}},
+                {'scope': {'path': 'posts'}, 'values': {'layout': 'post'}},
+                {
+                    'scope': {'path': '_drafts'},
+                    'values': {'permalink': '/drafts/:title'},
+                },
+            ],
+            **kwargs,
+        }
+    )
 
 
 def get_env(**kwargs: Any) -> Environment:

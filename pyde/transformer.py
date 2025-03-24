@@ -275,22 +275,28 @@ class CopyTransformer(BaseTransformer):
     def transform(self, data: AnyStr) -> AnyStr:
         return data
 
-    def get_output_path(self) -> Path:
+    def _get_path(self, as_filename: bool=False) -> Path:
         path = self._source.parent / self.transformed_name()
+        path_components = {
+            'path': path.parent, 'name': path.name,
+            'basename': path.stem, 'ext': path.suffix,
+        }
+
         try:
-            return Path(
-                self._permalink.format(
-                    path=path.parent,
-                    name=path.name,
-                    basename=path.stem,
-                    ext=path.suffix,
-                    **self.metadata,
-                )
-            ).relative_to('/')
+            result = self._permalink.format(**path_components, **self.metadata)
+            if as_filename and not result.endswith(path.suffix):
+                result += path.suffix
+            return Path(result).relative_to('/')
         except KeyError as exc:
             raise ValueError(
                 f'Cannot create filename from metadata element: {exc}'
             ) from exc
+
+    def get_permalink(self) -> Path:
+        return self._get_path()
+
+    def get_output_path(self) -> Path:
+        return self._get_path(as_filename=True)
 
 
 class TextTransformer(BaseTransformer, ABC):
