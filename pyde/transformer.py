@@ -32,7 +32,7 @@ class TransformerType(Protocol):
 
     def pipe(self, **meta: Any) -> Transformer: ...
 
-    def preprocess(self, src_root: Path) -> None: ...
+    def preprocess(self, src_root: Path) -> Self: ...
 
     def transform_from_file(self, src_root: Path) -> str | bytes:
         input = src_root / self.source
@@ -41,6 +41,7 @@ class TransformerType(Protocol):
 
     def transform_to_file(self, data: AnyStr, dest_root: Path) -> Path:
         output = dest_root / self.outputs
+        output.parent.mkdir(parents=True, exist_ok=True)
         transformed = self.transform(data)  # pylint: disable=assignment-from-no-return
         if isinstance(transformed, bytes):
             output.write_bytes(transformed)
@@ -49,7 +50,8 @@ class TransformerType(Protocol):
         return output
 
     def transform_file(self, src_root: Path, dest_root: Path) -> Path:
-        data = cast(bytes, self.transform_from_file(src_root))
+        input = src_root / self.source
+        data = input.read_bytes()
         return self.transform_to_file(data, dest_root)
 
 
@@ -123,8 +125,9 @@ class Transformer:
         def pipe(self, **meta: Any) -> Transformer:
             _ = meta
             return self
-        def preprocess(self, src_root: Path) -> None:
+        def preprocess(self, src_root: Path) -> Self:
             _ = src_root
+            return self
         def transform_from_file(self, src_root: Path) -> str | bytes:
             _ = src_root
         def transform_to_file(self, data: AnyStr, dest_root: Path) -> Path:
@@ -179,8 +182,9 @@ class BaseTransformer(Transformer, TransformerType):
             self.source, pipeline=[self, next],
         )
 
-    def preprocess(self, src_root: Path) -> None:
+    def preprocess(self, src_root: Path) -> Self:
         _ = src_root
+        return self
 
 
 class PipelineTransformer(BaseTransformer):
@@ -190,21 +194,23 @@ class PipelineTransformer(BaseTransformer):
     def outputs(self) -> Path:
         return self._pipeline[-1].outputs
 
-    def preprocess(self, src_root: Path) -> None:
+    def preprocess(self, src_root: Path) -> Self:
         metadata: dict[str, Any] = {}
         input = self.source
         for pipe in self._pipeline:
-            print(metadata)
             pipe.metadata.update(metadata)
-            pipe.preprocess(src_root)
             pipe._source = input
+            pipe.preprocess(src_root)
             input = pipe.outputs
             metadata = pipe.metadata
+        self._meta = metadata
+        return self
 
     def transform(self, data: AnyStr) -> str | bytes:
         current_data: str | bytes = data
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, Any] = self.metadata
         for pipe in self._pipeline:
+            print(metadata)
             pipe.metadata.update(metadata)
             current_data = pipe.transform(cast(AnyStr, current_data))
             metadata = pipe.metadata
@@ -222,11 +228,24 @@ class PipelineTransformer(BaseTransformer):
         super().__init__(source, **meta)
         if pipeline is not UNSET:
             self._pipeline = pipeline
-        try:
-            # This should be set either through init or the build classmethod.
-            self._pipeline
-        except AttributeError:
-            self._pipeline = ()
+
+
+    def pipe(self, **meta: Any) -> Transformer:
+        next = cast(PipelineTransformer, Transformer(self.outputs, **meta))
+        # Before joining, split off the CopyTransformer from the end of this
+        # pipeline.
+        *current_pipeline, current_copytf = self._pipeline
+        # Also split off the extra MetaTransformer from the start of next.
+        _next_metatf, *next_pipeline, next_copytf = next._pipeline  # pylint: disable=protected-access
+        if 'permalink' not in meta:
+            # If no permalink specified, don't let the CopyTransformer at the
+            # end of the new one override the one that's already in this
+            # pipeline.
+            pipeline = [*current_pipeline, *next_pipeline, current_copytf]
+        else:
+            # If a permalink has been specified, allow it to override this one.
+            pipeline = [*current_pipeline, *next_pipeline, next_copytf]
+        return PipelineTransformer(self.source, pipeline=pipeline)
 
     @classmethod
     def build(
@@ -240,7 +259,6 @@ class PipelineTransformer(BaseTransformer):
         input = source
         for transformer_type in transformers:
             transformer = transformer_type(input, **meta)
-            #input = transformer.outputs
             tfs.append(transformer)
         new_pipeline = cls(source, pipeline=tfs)
         new_pipeline._pipeline = tfs
@@ -269,6 +287,7 @@ class CopyTransformer(BaseTransformer):
     def transform_file(self, src_root: Path, dest_root: Path) -> Path:
         in_path = src_root / self.source
         out_path = dest_root / self.outputs
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(in_path, out_path)
         return out_path
 
@@ -289,7 +308,8 @@ class CopyTransformer(BaseTransformer):
             return Path(result).relative_to('/')
         except KeyError as exc:
             raise ValueError(
-                f'Cannot create filename from metadata element: {exc}'
+                f'Cannot create filename from metadata element {exc}'
+                f' - metadata: {self.metadata}'
             ) from exc
 
     def get_permalink(self) -> Path:
@@ -326,8 +346,15 @@ class TemplateApplyTransformer(TextTransformer):
         self._template = template
         self._meta = meta
 
+    def __repr__(self) -> str:
+        return (
+            f'{self.__class__.__name__}('
+            f'{str(self.source)!r}, {self._template!r}, **{self._meta})'
+        )
+
     def transform_text(self, text: str) -> str:
-        return self._template.render(content=text, **self._meta)
+        results = self._template.render(content=text, **self._meta)
+        return results
 
 
 class MetaProcessor(Protocol):
@@ -350,8 +377,9 @@ class MetaTransformer(TextTransformer):
         super().__init__(source, **meta)
         self._meta: dict[str, Any] = {}
 
-    def preprocess(self, src_root: Path) -> None:
+    def preprocess(self, src_root: Path) -> Self:
         self.transform_from_file(src_root)
+        return self
 
     def transform_text(self, text: str) -> str:
         frontmatter, content = self.split_frontmatter(text)

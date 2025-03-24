@@ -137,7 +137,7 @@ def test_metadata_on_template() -> None:
         '''
     )
     template = Template(template_str)
-    tf = Transformer(path, metaprocessor=metaprocessor, template=template)
+    tf = Transformer(path, template=template)
 
     assert tf.transform(content).rstrip() == dedent(
         '''\

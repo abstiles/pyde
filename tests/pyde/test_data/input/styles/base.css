@@ -1,0 +1,31 @@
+:root {
+	color-scheme: light dark;
+	--color: #EEE;
+	--background-color: #111;
+}
+
+@media (prefers-color-scheme: light) {
+	color-scheme: light;
+	:root {
+		--color: #111;
+		--background-color: #EEE;
+	}
+}
+
+@media (prefers-color-scheme: dark) {
+	color-scheme: dark;
+	:root {
+		--color: #EEE;
+		--background-color: #111;
+	}
+}
+
+body {
+	color: var(--color);
+	background-color: var(--background-color);
+	font-family: Arial;
+	font-size: 18px;
+	line-height: 1.6;
+	margin: auto;
+	max-width: 800px;
+}

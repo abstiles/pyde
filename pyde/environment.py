@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, Iterable, TypeGuard, TypeVar
 
 from .config import Config
+from .data import Data
 from .utils import flatmap
+from .templates import TemplateManager
 from .transformer import Transformer
 
 
@@ -22,6 +24,22 @@ class Environment:
     ):
         self.config = config
         self.exec_dir = exec_dir
+        self.template_manager = TemplateManager(
+            self.config.url,
+            self.config.includes_dir,
+            self.config.layouts_dir,
+            globals=self.site_globals(),
+        )
+
+    def site_globals(self) -> dict[str, Any]:
+        return {
+            'site': Data(url=self.config.url)
+        }
+
+    def build(self, output_dir: Path) -> None:
+        output_dir.mkdir(exist_ok=True)
+        for tf in self.transforms():
+            tf.transform_file(self.config.root, output_dir)
 
     def source_files(self) -> Iterable[Path]:
         globber = partial(iterglob, root=self.config.root)
@@ -44,23 +62,33 @@ class Environment:
             if file in included or not excluded_dirs.intersection(file.parents)
         }
 
+    def render_template(self, source: str | bytes | Path, **metadata: Any) -> str:
+        if isinstance(source, Path):
+            return self.template_manager.get_template(source).render(metadata)
+        template = source.decode('utf') if isinstance(source, bytes) else source
+        return self.template_manager.render(template, metadata)
 
     def transforms(self) -> Iterable[Transformer]:
-        base_values: dict[str, Any] = {
+        base: dict[str, Any] = {
             "permalink": self.config.permalink, "layout": "default",
+            "metaprocessor": self.render_template,
         }
         for source in self.source_files():
-            values = {**base_values}
+            values = {}
             for default in self.config.defaults:
                 if default.scope.matches(source):
                     values.update(default.values)
-            if 'draft_' in str(source):
-                raise Exception(Transformer(source, **values))
-            yield Transformer(source, **values)
+            tf = Transformer(source, **(base | values)).preprocess(self.config.root)
+            layout = tf.metadata.get('layout', values['layout'])
+            template_name = f'{layout}{tf.outputs.suffix}'
+            template = self.template_manager.get_template(template_name)
+            # TODO: propagate preprocessed metadata through a pipe so we don't
+            # preprocess twice.
+            tf = tf.pipe(template=template, page=tf.metadata).preprocess(self.config.root)
+            yield tf
 
     def output_files(self) -> Iterable[Path]:
         for transform in self.transforms():
-            print(f'transform: {transform}')
             transform.preprocess(self.config.root)
             yield transform.outputs
 

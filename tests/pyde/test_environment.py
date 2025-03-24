@@ -1,21 +1,41 @@
+import shutil
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from pyde.config import Config
 from pyde.environment import Environment
 from pyde.utils import dict_to_dataclass
 
 TEST_DATA_DIR = Path(__file__).parent / 'test_data'
+IN_DIR = TEST_DATA_DIR / 'input'
+OUT_DIR = TEST_DATA_DIR / 'output'
+EXPECTED_DIR = TEST_DATA_DIR / 'expected'
+
+
+@pytest.fixture
+def output_dir() -> Iterable[Path]:
+    OUT_DIR.mkdir(exist_ok=True)
+    yield OUT_DIR
+    for child in OUT_DIR.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
 
 def get_config(**kwargs: Any) -> Config:
     return dict_to_dataclass(
         Config,
         {
-            'root': TEST_DATA_DIR,
-            'layouts_dir': TEST_DATA_DIR / '_layouts',
-            'includes_dir': TEST_DATA_DIR / '_includes',
-            'drafts_dir': TEST_DATA_DIR / '_drafts',
-            'output_dir': TEST_DATA_DIR / '_site',
+            'root': IN_DIR,
+            'url': 'https://www.example.com',
+            'layouts_dir': IN_DIR / '_layouts',
+            'includes_dir': IN_DIR / '_includes',
+            'drafts_dir': IN_DIR / '_drafts',
+            'output_dir': IN_DIR / '_site',
             'permalink': '/:path/:name',
             'defaults': [
                 {'values': {'layout': 'default'}},
@@ -31,7 +51,7 @@ def get_config(**kwargs: Any) -> Config:
 
 
 def get_env(**kwargs: Any) -> Environment:
-    return Environment(get_config(**kwargs), exec_dir=TEST_DATA_DIR)
+    return Environment(get_config(**kwargs), exec_dir=IN_DIR)
 
 
 LAYOUT_FILES = {
@@ -52,6 +72,9 @@ OUTPUT_FILES = {
     'js/script.js',
     'posts/post.html',
     'styles/base.css',
+}
+DRAFT_OUTPUT_FILES = OUTPUT_FILES | {
+    'drafts/WIP.html',
 }
 
 def test_environment_source_files() -> None:
@@ -76,6 +99,14 @@ def test_environment_output_files() -> None:
 
 def test_environment_output_drafts() -> None:
     env = get_env(drafts=True)
-    assert set(map(str, env.output_files())) == (
-        OUTPUT_FILES | {'drafts/WIP.html'}
-    )
+    assert set(map(str, env.output_files())) == DRAFT_OUTPUT_FILES
+
+def test_build(output_dir: Path) -> None:
+    env = get_env(drafts=True)
+    env.build(output_dir)
+    for file in DRAFT_OUTPUT_FILES:
+        expected = EXPECTED_DIR / file
+        actual = output_dir / file
+
+        assert actual.exists()
+        assert actual.read_text().rstrip() == expected.read_text().rstrip()
