@@ -4,10 +4,11 @@ from functools import partial
 from glob import glob
 from os import PathLike
 from pathlib import Path
-from typing import Iterable, TypeGuard, TypeVar
+from typing import Any, Iterable, TypeGuard, TypeVar
 
 from .config import Config
 from .utils import flatmap
+from .transformer import Transformer
 
 
 T = TypeVar('T')
@@ -43,8 +44,25 @@ class Environment:
             if file in included or not excluded_dirs.intersection(file.parents)
         }
 
+
+    def transforms(self) -> Iterable[Transformer]:
+        base_values: dict[str, Any] = {
+            "permalink": self.config.permalink, "layout": "default",
+        }
+        for source in self.source_files():
+            values = {**base_values}
+            for default in self.config.defaults:
+                if default.scope.matches(source):
+                    values.update(default.values)
+            if 'draft_' in str(source):
+                raise Exception(Transformer(source, **values))
+            yield Transformer(source, **values)
+
     def output_files(self) -> Iterable[Path]:
-        pass
+        for transform in self.transforms():
+            print(f'transform: {transform}')
+            transform.preprocess(self.config.root)
+            yield transform.outputs
 
     def _tree(self, dir: Path) -> Iterable[Path]:
         return (

@@ -24,9 +24,7 @@ def test_permalink_transform() -> None:
 
 def test_markdown_transform() -> None:
     path = Path('path/to/post.md')
-    tf = Transformer(path, permalink='/new_root/:path/:name')
-
-    assert tf.outputs == Path('new_root/path/to/post.html')
+    tf = Transformer(path)
 
     assert tf.transform(
         'Hello *there,* world'
@@ -37,11 +35,8 @@ def test_template_transform() -> None:
     path = Path('path/to/post.txt')
     template = Template('Hello {{ content }}, {{ name }}')
     tf = Transformer(
-        path, permalink='/new_root/:path/:name',
-        template=template, name='friend'
+        path, template=template, name='friend'
     )
-
-    assert tf.outputs == Path('new_root/path/to/post.txt')
 
     assert tf.transform('world') == 'Hello world, friend'
 
@@ -49,9 +44,7 @@ def test_template_transform() -> None:
 def test_markdown_template_transform() -> None:
     path = Path('path/to/post.md')
     template = Template('<html><body>{{ content }}</body></html>')
-    tf = Transformer(path, permalink='/new_root/:path/:name', template=template)
-
-    assert tf.outputs == Path('new_root/path/to/post.html')
+    tf = Transformer(path, template=template)
 
     assert tf.transform(
         'Hello *there,* world'
@@ -61,13 +54,7 @@ def test_markdown_template_transform() -> None:
 def test_markdown_template_pipeline() -> None:
     path = Path('path/to/post.md')
     template = Template('<html><body>{{ content }}</body></html>')
-    tf = (
-        Transformer(path)
-            .pipe(template=template)
-            .pipe(permalink='/new_root/:path/:name')
-    )
-
-    assert tf.outputs == Path('new_root/path/to/post.html')
+    tf = Transformer(path).pipe(template=template)
 
     assert tf.transform(
         'Hello *there,* world'

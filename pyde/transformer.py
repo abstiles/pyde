@@ -25,7 +25,14 @@ class TransformerType(Protocol):
     @property
     def outputs(self) -> Path: ...
 
+    @property
+    def metadata(self) -> dict[str, Any]: ...
+
     def transform(self, data: AnyStr) -> str | bytes: ...
+
+    def pipe(self, **meta: Any) -> Transformer: ...
+
+    def preprocess(self, src_root: Path) -> None: ...
 
     def transform_from_file(self, src_root: Path) -> str | bytes:
         input = src_root / self.source
@@ -45,11 +52,6 @@ class TransformerType(Protocol):
         data = cast(bytes, self.transform_from_file(src_root))
         return self.transform_to_file(data, dest_root)
 
-    def pipe(self, **meta: Any) -> Transformer: ...
-
-    @property
-    def metadata(self) -> dict[str, Any]: ...
-
 
 class Transformer:
     __slots__ = ('_source',)
@@ -67,9 +69,9 @@ class Transformer:
     ) -> Transformer:
         _ = source, permalink, meta
         if cls is Transformer:
-            transformers: list[type] = []
+            transformers: list[type] = [MetaTransformer]
             if metaprocessor:
-                transformers.append(MetaTransformer)
+                transformers.append(MetaProcessorTransformer)
             for registration in cls.registered:
                 if registration.wants(source):
                     transformers.append(registration.transformer)
@@ -115,17 +117,23 @@ class Transformer:
     if TYPE_CHECKING:
         @property
         def outputs(self) -> Path: ...
+        @property
+        def metadata(self) -> dict[str, Any]:
+            return {}
+        def pipe(self, **meta: Any) -> Transformer:
+            _ = meta
+            return self
+        def preprocess(self, src_root: Path) -> None:
+            _ = src_root
+        def transform_from_file(self, src_root: Path) -> str | bytes:
+            _ = src_root
+        def transform_to_file(self, data: AnyStr, dest_root: Path) -> Path:
+            _ = data, dest_root
         def transform_file(self, src_root: Path, dest_root: Path) -> Path:
             _ = src_root, dest_root
             return dest_root
         def transform(self, data: AnyStr) -> str | bytes:
             return data
-        def pipe(self, **meta: Any) -> Transformer:
-            _ = meta
-            return self
-        @property
-        def metadata(self) -> dict[str, Any]:
-            return {}
 
 
 @dataclass(frozen=True)
@@ -171,6 +179,9 @@ class BaseTransformer(Transformer, TransformerType):
             self.source, pipeline=[self, next],
         )
 
+    def preprocess(self, src_root: Path) -> None:
+        _ = src_root
+
 
 class PipelineTransformer(BaseTransformer):
     _pipeline: Sequence[Transformer]
@@ -178,6 +189,17 @@ class PipelineTransformer(BaseTransformer):
     @property
     def outputs(self) -> Path:
         return self._pipeline[-1].outputs
+
+    def preprocess(self, src_root: Path) -> None:
+        metadata: dict[str, Any] = {}
+        input = self.source
+        for pipe in self._pipeline:
+            print(metadata)
+            pipe.metadata.update(metadata)
+            pipe.preprocess(src_root)
+            pipe._source = input
+            input = pipe.outputs
+            metadata = pipe.metadata
 
     def transform(self, data: AnyStr) -> str | bytes:
         current_data: str | bytes = data
@@ -218,7 +240,7 @@ class PipelineTransformer(BaseTransformer):
         input = source
         for transformer_type in transformers:
             transformer = transformer_type(input, **meta)
-            input = transformer.outputs
+            #input = transformer.outputs
             tfs.append(transformer)
         new_pipeline = cls(source, pipeline=tfs)
         new_pipeline._pipeline = tfs
@@ -255,14 +277,20 @@ class CopyTransformer(BaseTransformer):
 
     def get_output_path(self) -> Path:
         path = self._source.parent / self.transformed_name()
-        return Path(
-            self._permalink.format(
-                path=path.parent,
-                name=path.name,
-                basename=path.stem,
-                ext=path.suffix,
-            )
-        ).relative_to('/')
+        try:
+            return Path(
+                self._permalink.format(
+                    path=path.parent,
+                    name=path.name,
+                    basename=path.stem,
+                    ext=path.suffix,
+                    **self.metadata,
+                )
+            ).relative_to('/')
+        except KeyError as exc:
+            raise ValueError(
+                f'Cannot create filename from metadata element: {exc}'
+            ) from exc
 
 
 class TextTransformer(BaseTransformer, ABC):
@@ -311,19 +339,20 @@ class MetaTransformer(TextTransformer):
 
     def __init__(
         self, source: Path, /,
-        metaprocessor: MetaProcessor,
         **meta: Any,
     ):
         super().__init__(source, **meta)
-        self._processor = metaprocessor
         self._meta: dict[str, Any] = {}
+
+    def preprocess(self, src_root: Path) -> None:
+        self.transform_from_file(src_root)
 
     def transform_text(self, text: str) -> str:
         frontmatter, content = self.split_frontmatter(text)
         self._meta.update(
             parse_yaml_dict(frontmatter) if frontmatter else {}
         )
-        return self._processor(content, **self._meta)
+        return content
 
     @staticmethod
     def split_frontmatter(text: str) -> tuple[str | None, str]:
@@ -334,3 +363,20 @@ class MetaTransformer(TextTransformer):
         frontmatter = text[4:end]
         text = text[end + 5:]
         return frontmatter, text
+
+
+class MetaProcessorTransformer(TextTransformer):
+    @classmethod
+    def __match_path(cls, path: Path) -> bool:  # pylint: disable=unused-private-member
+        return bool(path)
+
+    def __init__(
+        self, source: Path, /,
+        metaprocessor: MetaProcessor,
+        **meta: Any,
+    ):
+        super().__init__(source, **meta)
+        self._processor = metaprocessor
+
+    def transform_text(self, text: str) -> str:
+        return self._processor(text, **self._meta)

@@ -1,10 +1,11 @@
 """
 Common utility functions
 """
-
 from collections import deque
-from collections.abc import Sequence, Reversible
+from collections.abc import Mapping, Reversible, Sequence
+from dataclasses import fields, is_dataclass
 from itertools import chain, count
+from types import GenericAlias
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -177,3 +178,37 @@ def last(
         return first(it, default)
     except (IndexError, ValueError):
         raise ValueError('Empty iterable has no last element') from None
+
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
+    DC_T = TypeVar('DC_T', bound=DataclassInstance)
+
+def dict_to_dataclass(cls: type['DC_T'], data: Mapping[str, Any]) -> 'DC_T':
+    types = {
+        field.name: field.type for field in fields(cls)
+        if isinstance(field.type, (type, GenericAlias))
+    }
+
+    def coerce(cls: type['DC_T'], val: Any) -> 'DC_T':
+        if isinstance(val, Mapping):
+            if is_dataclass(cls):
+                return dict_to_dataclass(cls, val)
+            return val
+        if isinstance(val, Iterable) and getattr(cls, '__args__', None):
+            contained_type = cls.__args__[0]  # type: ignore
+            if is_dataclass(contained_type):
+                return [coerce(contained_type, it) for it in val]  # type: ignore
+            return [  # type: ignore
+                it if isinstance(it, contained_type) else contained_type(it)
+                for it in val
+            ]
+        if isinstance(val, cls):
+            return val
+        return cls(val)  # type: ignore
+
+    coerced_data: dict[str, Any] = {
+        key: coerce(types.get(key, object), val)
+        for key, val in data.items()
+    }
+    return cls(**coerced_data)

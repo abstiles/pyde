@@ -1,19 +1,18 @@
 """
 Handle config file parsing
 """
-
-from dataclasses import dataclass, field, fields
+from dataclasses import InitVar, dataclass, field
 from functools import partial
 from glob import glob
 from os import PathLike
 from os.path import isdir
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, ClassVar, Iterable, Literal
 
 import yaml
 
-from .utils import flatmap
 from .url import UrlPath
+from .utils import dict_to_dataclass, flatmap
 
 PathType = str | PathLike[str]
 
@@ -37,6 +36,28 @@ class SourceFile:
         return self.path.read_bytes()
 
 
+@dataclass(frozen=True)
+class ScopeSpec:
+    ALL: ClassVar['ScopeSpec']
+    path: Path = Path('')
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'path', Path(self.path))
+
+    def matches(self, path: Path) -> bool:
+        if self is ScopeSpec.ALL:
+            return True
+        return self.path in path.parents
+
+ScopeSpec.ALL = ScopeSpec()
+
+
+@dataclass(frozen=True)
+class DefaultSpec:
+    scope: ScopeSpec = ScopeSpec.ALL
+    values: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class Config:
     """Model of the config values in the config file"""
@@ -48,7 +69,7 @@ class Config:
     permalink: str = '/:path/:basename'
     exclude: list[str] = field(default_factory=list)
     include: list[str] = field(default_factory=list)
-    defaults: list[dict[str,dict[str,str]]] = field(default_factory=list)
+    defaults: list[DefaultSpec] = field(default_factory=list)
     layouts_dir: Path = Path('_layouts')
     includes_dir: Path = Path('_includes')
     drafts_dir: Path = Path('_drafts')
@@ -78,23 +99,14 @@ class Config:
         """Parse the given config file"""
         with file.open() as f:
             config_data: dict[str, Any] = yaml.safe_load(f)
-        types = {
-            field.name: field.type for field in fields(cls)
-            if isinstance(field.type, type)
-        }
-        coerced_data = {
-            key: (val if isinstance(val, types.get(key, object)) else types[key](val))
-            for key, val in config_data.items()
-        }
-        return cls(config_file=file, **coerced_data)  # type: ignore
+        return dict_to_dataclass(cls, {'config_file': file, **config_data})
 
     def source_file(self, path: Path) -> SourceFile:
         """Attach metadata for file given scope defaults"""
         values: dict[str, str] = {"permalink": self.permalink, "layout": "default"}
         for default in self.defaults:
-            scope_path = Path(default.get('scope', {}).get('path', '.'))
-            if scope_path in path.relative_to(self.root).parents:
-                values.update(default.get('values', {}))
+            if default.scope.matches(path.relative_to(self.root)):
+                values.update(default.values)
         return SourceFile(path=path, root=self.root, values=values)
 
 
