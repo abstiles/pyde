@@ -210,7 +210,6 @@ class PipelineTransformer(BaseTransformer):
         current_data: str | bytes = data
         metadata: dict[str, Any] = self.metadata
         for pipe in self._pipeline:
-            print(metadata)
             pipe.metadata.update(metadata)
             current_data = pipe.transform(cast(AnyStr, current_data))
             metadata = pipe.metadata

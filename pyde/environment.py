@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import shutil
 from functools import partial
 from glob import glob
+from itertools import islice
 from os import PathLike
 from pathlib import Path
-from typing import Any, Iterable, TypeGuard, TypeVar
+from typing import Any, Callable, Iterable, TypeGuard, TypeVar, overload
 
 from .config import Config
 from .data import Data
-from .utils import flatmap
 from .templates import TemplateManager
 from .transformer import Transformer
-
+from .utils import flatmap
 
 T = TypeVar('T')
 
@@ -32,14 +33,35 @@ class Environment:
         )
 
     def site_globals(self) -> dict[str, Any]:
+        pyde = Data(
+            drafts=self.config.drafts,
+            environment="development" if self.config.drafts else "production"
+        )
         return {
-            'site': Data(url=self.config.url)
+            'site': Data(url=self.config.url),
+            'pyde': pyde,
+            'jekyll': pyde,
         }
 
     def build(self, output_dir: Path) -> None:
         output_dir.mkdir(exist_ok=True)
-        for tf in self.transforms():
+        # Check to see what already exists in the output directory.
+        existing_files = set(output_dir.rglob('*'))
+        built_files = (
             tf.transform_file(self.config.root, output_dir)
+            for tf in self.transforms()
+        )
+        # Grab the output files and all the parent directories that might have
+        # been created as part of the build.
+        outputs = flatmap(file_and_parents(upto=output_dir), built_files)
+        for file in outputs:
+            existing_files.discard(file)
+        for file in existing_files:
+            print(f'Removing: {file}')
+            if file.is_dir():
+                shutil.rmtree(file, ignore_errors=True)
+            else:
+                file.unlink(missing_ok=True)
 
     def source_files(self) -> Iterable[Path]:
         globber = partial(iterglob, root=self.config.root)
@@ -120,3 +142,24 @@ def _not_dotfile(item: Path) -> bool:
 def iterglob(pattern: str | PathLike[str], root: Path=Path('.')) -> Iterable[Path]:
     for path in glob(str(pattern), root_dir=root, recursive=True):
         yield root / path
+
+
+@overload
+def file_and_parents(*, upto: Path) -> Callable[[Path], Iterable[Path]]: ...
+@overload
+def file_and_parents(path: Path, /, *, upto: Path=Path('/')) -> Iterable[Path]: ...
+def file_and_parents(
+    path: Path | None=None, /, *, upto: Path=Path('/')
+) -> Iterable[Path] | Callable[[Path], Iterable[Path]]:
+    def generator(file: Path, /) -> Iterable[Path]:
+        assert upto is not None
+        yield file
+        parents = file.relative_to(upto).parents
+        # Use islice(reversed(...))) to skip the last parent, which will be
+        # "upto" itself.
+        yield from (
+            upto / parent for parent in islice(reversed(parents), 1, None)
+        )
+    if path is None:
+        return generator
+    return generator(path)

@@ -21,9 +21,9 @@ def output_dir() -> Iterable[Path]:
     yield OUT_DIR
     for child in OUT_DIR.iterdir():
         if child.is_dir():
-            shutil.rmtree(child)
+            shutil.rmtree(child, ignore_errors=True)
         else:
-            child.unlink()
+            child.unlink(missing_ok=True)
 
 
 def get_config(**kwargs: Any) -> Config:
@@ -110,3 +110,15 @@ def test_build(output_dir: Path) -> None:
 
         assert actual.exists()
         assert actual.read_text().rstrip() == expected.read_text().rstrip()
+
+def test_build_cleanup(output_dir: Path) -> None:
+    dirty_file = output_dir / "inner" / "dirty.txt"
+    dirty_file.parent.mkdir(parents=True, exist_ok=True)
+    dirty_file.write_text("I shouldn't be here!")
+
+    get_env(drafts=True).build(output_dir)
+
+    assert not dirty_file.exists()
+    for parent in dirty_file.relative_to(output_dir).parents:
+        if parent != Path('.'):
+            assert not (output_dir / parent).exists()
