@@ -23,6 +23,9 @@ from typing import (
 T = TypeVar('T')
 U = TypeVar('U')
 V = TypeVar('V')
+T_co = TypeVar('T_co', covariant=True)
+U_co = TypeVar('U_co', covariant=True)
+V_co = TypeVar('V_co', covariant=True)
 
 
 def flatmap(f: Callable[[T], Iterable[U]], it: Iterable[T]) -> Iterable[U]:
@@ -83,6 +86,9 @@ def dictfilter(  # type: ignore
 
 class Unset:
     __slots__ = ()
+    @classmethod
+    def is_not(cls, value: T | 'Unset') -> TypeGuard[T]:
+        return value is not cls()
 
 
 class UnsetMeta(type):
@@ -102,56 +108,88 @@ class UnsetMeta(type):
         return cls._instance  # type: ignore
 
 
-class Maybe(Generic[T]):
-    @overload
-    def __init__(self: 'Maybe[Never]', value: Unset): ...
-    @overload
-    def __init__(self, value: T): ...
-    def __init__(self, value: T | Unset):
-        self.__it = () if isinstance(value, Unset) else (value,)
-
-    def __iter__(self) -> Iterator[Never] | Iterator[T]:
-        return iter(self.__it)
-
-    def __bool__(self) -> bool:
-        return bool(self.__it)
-
-    @overload
-    def map(self: 'Maybe[Never]', f: Callable[..., Any]) -> 'Maybe[Never]': ...
-    @overload
-    def map(self, f: Callable[[T], U]) -> 'Maybe[U]': ...
-    def map(self, f: Callable[[T], U]) -> 'Maybe[U] | Maybe[Never]':
-        if self.__it:
-            return Maybe(f(self.__it[0]))
-        return cast(Maybe[Never], self)
-
-    @overload
-    def flatmap(self: 'Maybe[Never]', f: Callable[..., Any]) -> 'Maybe[Never]': ...
-    @overload
-    def flatmap(self, f: Callable[[T], 'Maybe[U]']) -> 'Maybe[U]': ...
-    def flatmap(self, f: Callable[[T], 'Maybe[U]']) -> 'Maybe[U] | Maybe[Never]':
-        if self.__it:
-            return f(self.__it[0])
-        return cast(Maybe[Never], self)
-
-
 if TYPE_CHECKING:
     class RaiseValueError(Unset): pass
 else:
     RaiseValueError = UnsetMeta('<raise ValueError>')
 
+
+class Maybe(Generic[T_co]):
+    """A generic, optional value"""
+
+    NOT: 'Maybe[T_co]'
+    __it: T_co
+
+    @classmethod
+    def yes(cls, value: T) -> 'Maybe[T]':
+        if value is not None:
+            return Maybe(value)
+        self = Maybe(object())
+        self.__it = None
+        return cast(Maybe[T], self)
+
+    @classmethod
+    def no(cls: type['Maybe[T]']) -> 'Maybe[T]':
+        return Maybe.NOT  # type: ignore
+
+    def __new__(cls, value: T_co | None) -> 'Maybe[T_co]':
+        if value is None:
+            if getattr(cls, 'NOT', None) is None:
+                cls.NOT = object.__new__(cls)
+            return cls.NOT
+        return object.__new__(cls)
+
+    def __init__(self, value: T_co):
+        self.__it = value
+
+    def __repr__(self) -> str:
+        if self is Maybe.no():
+            return 'Maybe.NOT'
+        return f'Maybe({self.__it!r})'
+
+    def __iter__(self) -> Iterator[T_co]:
+        if self is Maybe.no():
+            return iter(())
+        return iter((self.__it,))
+
+    def __bool__(self) -> bool:
+        return self is not Maybe.no()
+
+    def get(self, default: U=cast(Any, RaiseValueError())) -> T_co | U:
+        if self is Maybe.no():
+            return self.__it
+        if RaiseValueError.is_not(default):
+            return default
+        raise ValueError(f'{self} has no value')
+
+    def or_maybe(self, other: 'Maybe[U]') -> 'Maybe[T_co | U]':
+        if self is Maybe.no():
+            return other
+        return self
+
+    def map(self, f: Callable[[T_co], U]) -> 'Maybe[U]':
+        if self is Maybe.no():
+            return Maybe(f(self.__it))
+        return cast(Maybe[U], self)
+
+    def flatmap(self, f: Callable[[T_co], 'Maybe[U]']) -> 'Maybe[U]':
+        if self is Maybe.no():
+            return f(self.__it)
+        return cast(Maybe[U], self)
+
+Maybe(None)  # Initialize the singleton NOT instance.
+
 @overload
 def first(it: Iterable[T], /) -> T: ...
-@overload
-def first(it: Iterable[T], default: RaiseValueError, /) -> T: ...
 @overload
 def first(it: Iterable[T], default: U, /) -> T | U: ...
 def first(
     it: Iterable[T],
-    default: T | U | RaiseValueError = RaiseValueError(),
+    default: T | U = cast(Any, RaiseValueError()),
 ) -> T | U:
     try:
-        return next(iter(it), *Maybe(default))
+        args = () if isinstance(default, RaiseValueError) else (default,)
+        return next(iter(it), *(args))
     except StopIteration:
         raise ValueError('Empty iterable has no first element') from None
 
@@ -159,12 +197,10 @@ def first(
 @overload
 def last(it: Iterable[T], /) -> T: ...
 @overload
-def last(it: Iterable[T], default: RaiseValueError, /) -> T: ...
-@overload
 def last(it: Iterable[T], default: U, /) -> T | U: ...
 def last(
     it: Iterable[T],
-    default: T | U | RaiseValueError = RaiseValueError(),
+    default: T | U = cast(Any, RaiseValueError()),
 ) -> T | U:
     try:
         if isinstance(it, Sequence):
@@ -183,6 +219,9 @@ def last(
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
     DC_T = TypeVar('DC_T', bound=DataclassInstance)
+else:
+    DC_T = TypeVar('DC_T')
+
 
 def dict_to_dataclass(cls: type['DC_T'], data: Mapping[str, Any]) -> 'DC_T':
     types = {

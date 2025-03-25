@@ -104,9 +104,7 @@ class Environment:
             layout = tf.metadata.get('layout', values['layout'])
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
-            # TODO: propagate preprocessed metadata through a pipe so we don't
-            # preprocess twice.
-            tf = tf.pipe(template=template, page=tf.metadata).preprocess(self.config.root)
+            tf = tf.pipe(template=template, page=tf.metadata)
             yield tf
 
     def output_files(self) -> Iterable[Path]:

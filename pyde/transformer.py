@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, AnyStr, ClassVar, Protocol, Self, Type, c
 from jinja2 import Template
 
 from .markdown import markdownify
+from .utils import Maybe
 from .yaml import parse_yaml_dict
 
 TO_FORMAT_STR_RE = re.compile(r':(\w+)')
@@ -27,6 +28,8 @@ class TransformerType(Protocol):
 
     @property
     def metadata(self) -> dict[str, Any]: ...
+
+    def set_meta(self, meta: dict[str, Any]) -> Self: ...
 
     def transform(self, data: AnyStr) -> str | bytes: ...
 
@@ -64,6 +67,7 @@ class Transformer:
         cls,
         source: Path,
         /, *,
+        parse_frontmatter: bool=True,
         permalink: str=DEFAULT_PERMALINK,
         template: Template | None=None,
         metaprocessor: MetaProcessor | None=None,
@@ -71,7 +75,9 @@ class Transformer:
     ) -> Transformer:
         _ = source, permalink, meta
         if cls is Transformer:
-            transformers: list[type] = [MetaTransformer]
+            transformers: list[type[Transformer]] = []
+            if parse_frontmatter:
+                transformers.append(MetaTransformer)
             if metaprocessor:
                 transformers.append(MetaProcessorTransformer)
             for registration in cls.registered:
@@ -87,7 +93,7 @@ class Transformer:
                     **meta,
                 )
             cls = transformers[0]
-        return super().__new__(cls)
+        return super().__new__(cls)  # pyright: ignore
 
     def __init_subclass__(cls, /, pattern: str='', **kwargs: Any):
         super().__init_subclass__(**kwargs)
@@ -117,11 +123,15 @@ class Transformer:
         return self._source
 
     if TYPE_CHECKING:
+        _meta: dict[str, Any]
         @property
         def outputs(self) -> Path: ...
         @property
         def metadata(self) -> dict[str, Any]:
             return {}
+        def set_meta(self, meta: dict[str, Any]) -> Self:
+            _ = meta
+            return self
         def pipe(self, **meta: Any) -> Transformer:
             _ = meta
             return self
@@ -129,9 +139,10 @@ class Transformer:
             _ = src_root
             return self
         def transform_from_file(self, src_root: Path) -> str | bytes:
-            _ = src_root
+            return str(src_root)
         def transform_to_file(self, data: AnyStr, dest_root: Path) -> Path:
-            _ = data, dest_root
+            _ = data
+            return dest_root
         def transform_file(self, src_root: Path, dest_root: Path) -> Path:
             _ = src_root, dest_root
             return dest_root
@@ -176,6 +187,10 @@ class BaseTransformer(Transformer, TransformerType):
     def metadata(self) -> dict[str, Any]:
         return self._meta
 
+    def set_meta(self, meta: dict[str, Any]) -> Self:
+        self._meta.update(meta)
+        return self
+
     def pipe(self, **meta: Any) -> Transformer:
         next = Transformer(self.outputs, **meta)
         return PipelineTransformer(
@@ -189,13 +204,16 @@ class BaseTransformer(Transformer, TransformerType):
 
 class PipelineTransformer(BaseTransformer):
     _pipeline: Sequence[Transformer]
+    _preprocessed: Path | None
 
     @property
     def outputs(self) -> Path:
         return self._pipeline[-1].outputs
 
     def preprocess(self, src_root: Path) -> Self:
-        metadata: dict[str, Any] = {}
+        if self._preprocessed == src_root:
+            return self
+        metadata: dict[str, Any] = self.metadata
         input = self.source
         for pipe in self._pipeline:
             pipe.metadata.update(metadata)
@@ -204,6 +222,7 @@ class PipelineTransformer(BaseTransformer):
             input = pipe.outputs
             metadata = pipe.metadata
         self._meta = metadata
+        self._preprocessed = src_root
         return self
 
     def transform(self, data: AnyStr) -> str | bytes:
@@ -227,23 +246,67 @@ class PipelineTransformer(BaseTransformer):
         super().__init__(source, **meta)
         if pipeline is not UNSET:
             self._pipeline = pipeline
+        self._preprocessed = None
 
+    def __getitem__(self, idx: int | slice) -> Transformer | PipelineTransformer:
+        if isinstance(idx, slice):
+            pipe_tf = PipelineTransformer(
+                self.source,
+                pipeline=self._pipeline[idx.start:idx.stop:idx.step]
+            )
+            pipe_tf._meta = self.metadata
+            return pipe_tf
+        return self._pipeline[idx]
+
+    def _partitioned(
+        self
+    ) -> tuple[Maybe[MetaTransformer], Sequence[Transformer], Maybe[CopyTransformer]]:
+        meta_tf: Maybe[MetaTransformer] = Maybe.no()
+        tfs: list[Transformer] = []
+        copy_tf: Maybe[CopyTransformer] = Maybe.no()
+        for tf in self._pipeline:
+            match tf:
+                case MetaTransformer():
+                    if not meta_tf:
+                        meta_tf = Maybe(tf)
+                case CopyTransformer():
+                    copy_tf = Maybe(tf)
+                case _:
+                    tfs.append(tf)
+        return meta_tf, tfs, copy_tf
 
     def pipe(self, **meta: Any) -> Transformer:
         next = cast(PipelineTransformer, Transformer(self.outputs, **meta))
+        if (src_path := self._preprocessed) is not None:
+            next[0].set_meta(self._meta)
+            next[1:].set_meta(self._meta).preprocess(src_path)
         # Before joining, split off the CopyTransformer from the end of this
         # pipeline.
-        *current_pipeline, current_copytf = self._pipeline
+        current_metatf, current_pipeline, current_copytf = self._partitioned()
         # Also split off the extra MetaTransformer from the start of next.
-        _next_metatf, *next_pipeline, next_copytf = next._pipeline  # pylint: disable=protected-access
+        next_metatf, next_pipeline, next_copytf = next._partitioned()
+        # Pipelines created by a call to `Transformer` are guaranteed to start
+        # with a MetaTransformer and end with a CopyTransformer, but there's no
+        # way of knowing if self was created that way. Either way, make sure
+        # the pipeline starts and ends properly.
         if 'permalink' not in meta:
             # If no permalink specified, don't let the CopyTransformer at the
-            # end of the new one override the one that's already in this
+            # end of the new one override one that might already be in this
             # pipeline.
-            pipeline = [*current_pipeline, *next_pipeline, current_copytf]
+            pipeline = [
+                *current_metatf.or_maybe(next_metatf),
+                *current_pipeline,
+                *next_pipeline,
+                *current_copytf.or_maybe(next_copytf),
+            ]
         else:
             # If a permalink has been specified, allow it to override this one.
-            pipeline = [*current_pipeline, *next_pipeline, next_copytf]
+            pipeline = [
+                *current_metatf.or_maybe(next_metatf),
+                *current_pipeline,
+                *next_pipeline,
+                *next_copytf,
+            ]
         return PipelineTransformer(self.source, pipeline=pipeline)
 
     @classmethod
