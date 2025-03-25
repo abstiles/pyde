@@ -40,10 +40,10 @@ T = TypeVar('T')
 class TemplateManager:
     def __init__(
         self, url: UrlPath, includes_dir: Path, templates_dir: Path,
-        globals: dict[str, Any]={},
+        globals: Mapping[str, Any]={},
     ):
         self.env = Environment(
-            loader=TemplateLoader(templates_dir),
+            loader=TemplateLoader(templates_dir, includes_dir),
             autoescape=select_autoescape(
                 enabled_extensions=(),
                 default_for_string=False,
@@ -136,16 +136,17 @@ class TemplateError(ValueError):
 
 class TemplateLoader(BaseLoader):
     """Main loader for templates"""
-    def __init__(self, templates_dir: Path):
+    def __init__(self, templates_dir: Path, includes_dir: Path):
         self.templates_dir = templates_dir
+        self.includes_dir = includes_dir
 
     def get_source(
         self, environment: Environment, template: str
     ) -> tuple[str, str | None, Callable[[], bool] | None]:
-        if template.startswith('_includes'):
+        if template.startswith(str(self.includes_dir)):
             path = Path(template)
             if not path.is_file():
-                include_name = path.relative_to('_includes')
+                include_name = path.relative_to(str(self.includes_dir))
                 raise ValueError('Cannot find template {include_name} to include')
         elif (path_by_name := self.templates_dir / template).is_file():
             path = path_by_name
