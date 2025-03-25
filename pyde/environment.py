@@ -1,20 +1,32 @@
 from __future__ import annotations
 
+import dataclasses
+import re
 import shutil
 from functools import partial
 from glob import glob
 from itertools import islice
 from os import PathLike
 from pathlib import Path
-from typing import Any, Callable, Iterable, TypeGuard, TypeVar, overload
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Literal,
+    TypeAlias,
+    TypeGuard,
+    TypeVar,
+    overload,
+)
 
 from .config import Config
 from .data import Data
 from .templates import TemplateManager
-from .transformer import Transformer
+from .transformer import CopyTransformer, Transformer
 from .utils import flatmap
 
 T = TypeVar('T')
+HEADER_RE = re.compile(b'^---\r?\n')
 
 
 class Environment:
@@ -23,14 +35,23 @@ class Environment:
         config: Config, /,
         exec_dir: Path=Path('.')
     ):
+        pyde = Data(
+            environment='development' if config.drafts else 'production',
+            **dataclasses.asdict(config)
+        )
         self.config = config
         self.exec_dir = exec_dir
         self.template_manager = TemplateManager(
             self.config.url,
             self.config.includes_dir,
             self.config.layouts_dir,
-            globals=self.site_globals(),
+            globals={
+                'site': Data(url=self.config.url),
+                'pyde': pyde,
+                'jekyll': pyde,
+            },
         )
+        self.site_filer = SiteFiler(self)
 
     def site_globals(self) -> dict[str, Any]:
         pyde = Data(
@@ -96,6 +117,9 @@ class Environment:
             "metaprocessor": self.render_template,
         }
         for source in self.source_files():
+            if not self.should_transform(source):
+                yield CopyTransformer(source)
+                continue
             values = {}
             for default in self.config.defaults:
                 if default.scope.matches(source):
@@ -107,9 +131,16 @@ class Environment:
             tf = tf.pipe(template=template, page=tf.metadata)
             yield tf
 
+    def should_transform(self, source: Path) -> bool:
+        """Return true if this file should be transformed in some way."""
+        with (self.config.root / source).open('rb') as f:
+            header = f.read(5)
+            if HEADER_RE.match(header):
+                return True
+        return False
+
     def output_files(self) -> Iterable[Path]:
         for transform in self.transforms():
-            transform.preprocess(self.config.root)
             yield transform.outputs
 
     def _tree(self, dir: Path) -> Iterable[Path]:
@@ -127,6 +158,42 @@ class Environment:
 
     def draft_files(self) -> Iterable[Path]:
         return self._tree(self.config.drafts_dir)
+
+
+SiteFileType: TypeAlias = Literal['post', 'page', 'raw']
+
+class SiteFile:
+    def __init__(self, env: Environment, tf: Transformer, type: SiteFileType):
+        self.env, self.tf, self.type = env, tf, type
+        self.metadata = Data(tf.metadata)
+
+    def render(self) -> None:
+        self.tf.transform_file(
+            self.env.config.root,
+            self.env.config.output_dir
+        )
+        self.metadata = Data(self.tf.metadata)
+
+
+class SiteFiler:
+    def __init__(self, env: Environment):
+        self.env = env
+
+    def page(self, tf: Transformer) -> SiteFile:
+        return SiteFile(self.env, tf, 'page')
+
+    def post(self, tf: Transformer) -> SiteFile:
+        return SiteFile(self.env, tf, 'post')
+
+    def raw(self, tf: Transformer) -> SiteFile:
+        return SiteFile(self.env, tf, 'raw')
+
+    def __call__(self, tf: Transformer) -> SiteFile:
+        if isinstance(tf, CopyTransformer):
+            return self.raw(tf)
+        if tf.source.suffix in ('.md', '.html'):
+            return self.page(tf)
+        return self.raw(tf)
 
 
 def _not_none(item: T | None) -> TypeGuard[T]:

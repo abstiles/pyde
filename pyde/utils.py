@@ -251,3 +251,23 @@ def dict_to_dataclass(cls: type['DC_T'], data: Mapping[str, Any]) -> 'DC_T':
         for key, val in data.items()
     }
     return cls(**coerced_data)
+
+
+K1 = TypeVar('K1')
+K2 = TypeVar('K2')
+V1 = TypeVar('V1')
+V2 = TypeVar('V2')
+
+def _both_mapping(d1: Any, d2: Any) -> bool:
+    return isinstance(d1, Mapping) and isinstance(d2, Mapping)
+
+def merge_dicts(d1: dict[K1, V1], d2: dict[K2, V2]) -> dict[K1 | K2, V1 | V2]:
+    try:
+        return {
+            k: merge_dicts(d1[k], d2[k])  # type: ignore
+            if _both_mapping(d1.get(k), d2.get(k))  # type: ignore
+            else d2.get(k, d1.get(k))  # type: ignore
+            for k in set(d1) | set(d2)
+        }
+    except KeyError:
+        raise Exception(f'd1: {d1} - d2: {d2}')

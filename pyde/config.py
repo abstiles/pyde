@@ -1,7 +1,7 @@
 """
 Handle config file parsing
 """
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from functools import partial
 from glob import glob
 from os import PathLike

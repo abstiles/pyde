@@ -40,7 +40,7 @@ T = TypeVar('T')
 class TemplateManager:
     def __init__(
         self, url: UrlPath, includes_dir: Path, templates_dir: Path,
-        globals: dict[str, Any],
+        globals: dict[str, Any]={},
     ):
         self.env = Environment(
             loader=TemplateLoader(templates_dir),
@@ -52,11 +52,7 @@ class TemplateManager:
             extensions=[JekyllTranslator, 'jinja2.ext.loopcontrols'],
         )
         self.env.globals["includes"] = Namespace()
-        self.env.globals["site"] = globals['site']
         self.env.globals.update(globals)
-        #self.env.globals["pyde"] = pyde
-        #self.env.globals["jekyll"] = pyde
-        #self.env.globals["url"] = url
         self.env.extend(
             pyde_includes_dir=includes_dir,
             pyde_templates_dir=templates_dir
@@ -81,6 +77,10 @@ class TemplateManager:
         self.env.filters['absolute_url'] = absolute_url
         self.env.filters['relative_url'] = relative_url
         self.env.filters['reverse'] = reverse
+
+    @property
+    def globals(self) -> dict[str, Any]:
+        return self.env.globals
 
     @classmethod
     def from_config(cls, config: Config) -> 'TemplateManager':

@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AnyStr, ClassVar, Protocol, Self, Type, cast
 
 from jinja2 import Template
+from markupsafe import Markup
 
+from .data import Data
 from .markdown import markdownify
-from .utils import Maybe
+from .utils import Maybe, ilen, merge_dicts
 from .yaml import parse_yaml_dict
 
 TO_FORMAT_STR_RE = re.compile(r':(\w+)')
@@ -188,7 +190,9 @@ class BaseTransformer(Transformer, TransformerType):
         return self._meta
 
     def set_meta(self, meta: dict[str, Any]) -> Self:
-        self._meta.update(meta)
+        #self._meta.setdefault('page', {}).update(meta.get('page', {}))
+        #self._meta.update({k: meta[k] for k in meta if k != 'page'})
+        self._meta = merge_dicts(self._meta, meta)
         return self
 
     def pipe(self, **meta: Any) -> Transformer:
@@ -216,7 +220,7 @@ class PipelineTransformer(BaseTransformer):
         metadata: dict[str, Any] = self.metadata
         input = self.source
         for pipe in self._pipeline:
-            pipe.metadata.update(metadata)
+            pipe.set_meta(metadata)
             pipe._source = input
             pipe.preprocess(src_root)
             input = pipe.outputs
@@ -229,7 +233,7 @@ class PipelineTransformer(BaseTransformer):
         current_data: str | bytes = data
         metadata: dict[str, Any] = self.metadata
         for pipe in self._pipeline:
-            pipe.metadata.update(metadata)
+            pipe.set_meta(metadata)
             current_data = pipe.transform(cast(AnyStr, current_data))
             metadata = pipe.metadata
         return current_data
@@ -392,12 +396,22 @@ class TextTransformer(BaseTransformer, ABC):
 
 class MarkdownTransformer(TextTransformer, pattern='*.md'):
     """Transform markdown to HTML"""
+    PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)
 
     def transformed_name(self) -> str:
         return str(self._source.with_suffix('.html').name)
 
     def transform_text(self, text: str) -> str:
-        return markdownify(text)
+        html = markdownify(text)
+        page = {}
+        page = self._meta.setdefault('page', {})
+        try:
+            page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
+            page['word_count'] = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
+        except (TypeError, IndexError):
+            page['excerpt'] = ''
+            page['word_count'] = 0
+        return html
 
 
 class TemplateApplyTransformer(TextTransformer):
