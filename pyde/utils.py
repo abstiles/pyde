@@ -2,8 +2,9 @@
 Common utility functions
 """
 from collections import deque
-from collections.abc import Mapping, Reversible, Sequence
+from collections.abc import Generator, Mapping, Reversible, Sequence
 from dataclasses import fields, is_dataclass
+from functools import wraps
 from itertools import chain, count
 from types import GenericAlias
 from typing import (
@@ -13,11 +14,14 @@ from typing import (
     Generic,
     Iterable,
     Iterator,
+    Protocol,
     TypeGuard,
     TypeVar,
     cast,
     overload,
 )
+
+from typing_extensions import ParamSpec
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -25,6 +29,8 @@ V = TypeVar('V')
 T_co = TypeVar('T_co', covariant=True)
 U_co = TypeVar('U_co', covariant=True)
 V_co = TypeVar('V_co', covariant=True)
+T_contra = TypeVar('T_contra', contravariant=True)
+P = ParamSpec('P')
 
 
 def flatmap(f: Callable[[T], Iterable[U]], it: Iterable[T]) -> Iterable[U]:
@@ -263,35 +269,34 @@ def _both_mapping(
     d1, d2 = pair
     return isinstance(d1, Mapping) and isinstance(d2, Mapping)
 
+
 def merge_dicts(
     orig: Mapping[K1, V1],
     update: Mapping[K2, V2]
-) -> Mapping[K1 | K2, V1 | V2]:
+) -> dict[K1 | K2, V1 | V2]:
     d1 = cast(Mapping[K1 | K2, V1], orig)
     d2 = cast(Mapping[K1 | K2, V2], update)
-    result: Mapping[K1 | K2, V1 | V2] = {
+    return {
         k: merge_dicts(*dicts) if _both_mapping(dicts := (d1.get(k), d2.get(k)))
         else d2.get(k, d1.get(k))  # type: ignore
         for k in set(d1) | set(d2)
     }
-    return result
 
 
 @overload
 def seq_pivot(
-    seq: Sequence[Mapping[T, U]], index: T, /,
+    seq: Iterable[Mapping[T, U]], index: T, /,
 ) -> Mapping[U, Sequence[Mapping[T, U]]]: ...
 @overload
 def seq_pivot(
-    seq: Iterable[U], /, *, attr: str,
-) -> Mapping[Any, Sequence[U]]: ...
-def seq_pivot(  # type: ignore [misc]
-    seq: Iterable[Mapping[T, U]] | Iterable[U],
-    index: T | None=None,
+    seq: Iterable[T], /, *, attr: str,
+) -> Mapping[Any, Sequence[T]]: ...
+def seq_pivot(
+    seq: Iterable[Mapping[T, U]] | Iterable[V], index: T | None=None,
     /, *, attr: str='',
-) -> Mapping[U, Sequence[Mapping[T, U]]] | Mapping[Any, Sequence[U]]:
+) -> Mapping[U, Sequence[Mapping[T, U]]] | Mapping[Any, Sequence[V]]:
     if attr:
-        seq = cast(Iterable[U], seq)
+        seq = cast(Iterable[V], seq)
         return seq_pivot_object(seq, attr)
     seq = cast(Iterable[Mapping[T, U]], seq)
     return seq_pivot_mapping(seq, cast(T, index))
@@ -315,3 +320,120 @@ def seq_pivot_object(
         if hasattr(item, index):
             result.setdefault(getattr(item, index), []).append(item)
     return result
+
+
+class Predicate(Protocol, Generic[T_contra]):
+    def __call__(self, arg: T_contra, /) -> bool: ...
+
+
+@overload
+def bucketize(  # pyright: ignore
+    it: Iterable[T], /, *filters: Predicate[T],
+) -> Sequence[Sequence[T]]: ...
+@overload
+def bucketize(
+    it: Iterable[T], /, **kwfilters: Predicate[T],
+) -> Mapping[str, Sequence[T]]: ...
+@overload
+def bucketize(
+    it: Iterable[T], filter: Predicate[T], /, *filters: Predicate[T],
+    **kwfilters: Predicate[T],
+) -> Mapping[int | str, Sequence[T]]: ...
+def bucketize(
+    it: Iterable[T], /, *filters: Predicate[T],
+    **kwfilters: Predicate[T],
+) -> (
+    Sequence[Sequence[T]]
+    | Mapping[str, Sequence[T]]
+    | Mapping[int | str, Sequence[T]]
+):
+    """
+    Arrange an iterable into non-overlapping buckets
+
+    Buckets are identified by predicates provided as either positional
+    arguments or keyword arguments. If only positional arguments are provided,
+    the result is a sequence where each position in the sequence contains the
+    items from the iterable which matched the corresponding predicate from the
+    arguments. If keyword arguments are provided, the result is a mapping
+    between the corresponding keywords and the matching iterable items. If
+    positional arguments are also provided, their index will be their keys.
+
+    Only the first matching predicate is considered. Positional predicates come
+    before keyword predicates.
+
+    """
+    results: Mapping[str | int, list[T]] | Mapping[int, list[T]]
+    filter_funcs: list[tuple[str | int, Callable[[T], bool]]] = [
+        *enumerate(filters), *kwfilters.items()
+    ]
+    if kwfilters:
+        results = (
+            { idx: [] for idx in range(len(filters)) }
+            | { key: [] for key in kwfilters }
+        )
+    else:
+        results = cast(
+            Mapping[str | int, list[T]],
+            tuple([] for idx in range(len(filters)))
+        )
+    for item in it:
+        for key, filter_func in filter_funcs:
+            if filter_func(item):
+                results[key].append(item)
+                break
+    return results
+
+
+@overload
+def iter_buckets(
+    it: Iterable[T], /, *filters: Predicate[T],
+) -> Iterable[tuple[int, T]]: ...
+@overload
+def iter_buckets(
+    it: Iterable[T], /, **kwfilters: Predicate[T],
+) -> Iterable[tuple[str, T]]: ...
+@overload
+def iter_buckets(
+    it: Iterable[T], filter: Predicate[T], /, *filters: Predicate[T],
+    **kwfilters: Predicate[T],
+) -> Iterable[tuple[int | str, T]]: ...
+def iter_buckets(
+    it: Iterable[T], /, *filters: Predicate[T],
+    **kwfilters: Predicate[T],
+) -> Iterable[tuple[int | str, T]]:
+    """
+    Make an iterable that categorizes elements from multiple predicates
+
+    This works similarly to `groupby`, but with more flexibility. Predicates
+    are provided as either positional arguments or keyword arguments, and the
+    iterated items are `(id, item)` pairs, where `id` is the 0-based index of
+    the positional predicate that matched or the keyword of the keyword
+    predicate that matched.
+
+    Only the first matching predicate is considered. Positional predicates come
+    before keyword predicates.
+
+    """
+    filter_funcs = [*enumerate(filters), *kwfilters.items()]
+    for item in it:
+        for key, filter_func in filter_funcs:
+            if filter_func(item):
+                yield key, item  # type: ignore
+                break
+
+
+class GeneratorCoroutine(Protocol, Generic[P, T_contra]):
+    def __call__(
+        self, *args: P.args, **kwargs: P.kwargs
+    ) -> Generator[Any, T_contra, Any]: ...
+
+
+def prime_coroutine(
+    func: GeneratorCoroutine[P, T_contra]
+) -> GeneratorCoroutine[P, T_contra]:
+    @wraps(func)
+    def wrapper(*args: P.args, **kwds: P.kwargs) -> Generator[Any, T_contra, Any]:
+        generator = func(*args, **kwds)
+        next(generator)
+        return generator
+    return wrapper

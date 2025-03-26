@@ -59,9 +59,16 @@ class TransformerType(Protocol):
         return self.transform_to_file(data, dest_root)
 
 
-class Transformer:
-    __slots__ = ('_source',)
+@dataclass(frozen=True)
+class TransformerRegistration:
+    transformer: Type[Transformer]
+    wants: Callable[[Path], bool]
+
+
+class Transformer(TransformerType):
+    __slots__ = ('_source', '_meta')
     _source: Path
+    _meta: dict[str, Any]
     registered: ClassVar[list[TransformerRegistration]] = []  # pylint: disable=declare-non-slot
 
     def __new__(
@@ -123,8 +130,10 @@ class Transformer:
     def source(self) -> Path:
         return self._source
 
+    # Phony implementations of the TransformerType protocol just to convince
+    # type checkers that it's okay to try calling `Transformer(...)` even
+    # though it's abstract.
     if TYPE_CHECKING:
-        _meta: dict[str, Any]
         @property
         def outputs(self) -> Path: ...
         @property
@@ -151,15 +160,8 @@ class Transformer:
             return data
 
 
-@dataclass(frozen=True)
-class TransformerRegistration:
-    transformer: Type[Transformer]
-    wants: Callable[[Path], bool]
-
-
-class BaseTransformer(Transformer, TransformerType):
-    __slots__ = ('_meta',)
-    _meta: dict[str, Any]
+class BaseTransformer(Transformer):
+    __slots__ = ()
 
     def __init__(
         self,
@@ -194,8 +196,6 @@ class BaseTransformer(Transformer, TransformerType):
         return self._meta
 
     def set_meta(self, meta: dict[str, Any]) -> Self:
-        #self._meta.setdefault('page', {}).update(meta.get('page', {}))
-        #self._meta.update({k: meta[k] for k in meta if k != 'page'})
         self._meta = merge_dicts(self._meta, meta)
         return self
 
@@ -228,7 +228,7 @@ class PipelineTransformer(BaseTransformer):
             pipe._source = input
             pipe.preprocess(src_root)
             input = pipe.outputs
-            metadata = pipe.metadata
+            metadata = merge_dicts(metadata, pipe.metadata)
         self._meta = metadata
         self._preprocessed = src_root
         return self
@@ -286,8 +286,8 @@ class PipelineTransformer(BaseTransformer):
     def pipe(self, **meta: Any) -> Transformer:
         next = cast(PipelineTransformer, Transformer(self.outputs, **meta))
         if (src_path := self._preprocessed) is not None:
-            next[0].set_meta(self._meta)
-            next[1:].set_meta(self._meta).preprocess(src_path)
+            next[0].set_meta(self.metadata)
+            next[1:].set_meta(self.metadata).preprocess(src_path)
         # Before joining, split off the CopyTransformer from the end of this
         # pipeline.
         current_metatf, current_pipeline, current_copytf = self._partitioned()
@@ -297,25 +297,25 @@ class PipelineTransformer(BaseTransformer):
         # with a MetaTransformer and end with a CopyTransformer, but there's no
         # way of knowing if self was created that way. Either way, make sure
         # the pipeline starts and ends properly.
-        if 'permalink' not in meta:
-            # If no permalink specified, don't let the CopyTransformer at the
-            # end of the new one override one that might already be in this
-            # pipeline.
-            pipeline = [
-                *current_metatf.or_maybe(next_metatf),
-                *current_pipeline,
-                *next_pipeline,
-                *current_copytf.or_maybe(next_copytf),
-            ]
-        else:
+        head = [
+            *current_metatf.or_maybe(next_metatf),
+            *current_pipeline,
+        ]
+        if 'permalink' in meta:
             # If a permalink has been specified, allow it to override this one.
-            pipeline = [
-                *current_metatf.or_maybe(next_metatf),
-                *current_pipeline,
+            tail = [
                 *next_pipeline,
                 *next_copytf,
             ]
-        return PipelineTransformer(self.source, pipeline=pipeline).set_meta(self._meta)
+        else:
+            # If no permalink specified, don't let the CopyTransformer at the
+            # end of the new one override one that might already be in this
+            # pipeline.
+            tail = [
+                *next_pipeline,
+                *current_copytf.or_maybe(next_copytf),
+            ]
+        return PipelineTransformer(self.source, pipeline=head + tail).set_meta(self._meta)
 
     @classmethod
     def build(
@@ -349,6 +349,25 @@ class CopyTransformer(BaseTransformer):
         super().__init__(source, **meta)
         self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
         self._collection_root = collection_root
+        try:
+            # Attempt to build the path immediately. For a bare
+            # CopyTransformer, we should have all the info we need to do that
+            # without a preprocess step.
+            self._generate_path_info()
+        except ValueError:
+            # An error here means we might need preprocessed metadata to
+            # assemble the destination path.
+            pass
+
+    def _generate_path_info(self) -> Self:
+        self._meta['file'] = self._get_path(as_filename=True)
+        self._meta['path'] = Path('/') / self._get_path()
+        return self
+
+    def preprocess(self, src_root: Path) -> Self:
+        super().preprocess(src_root)
+        self._generate_path_info()
+        return self
 
     def __repr__(self) -> str:
         return (
@@ -376,7 +395,7 @@ class CopyTransformer(BaseTransformer):
         }
 
         try:
-            result = self._permalink.format(**path_components, **self.metadata)
+            result = self._permalink.format(**{**self.metadata, **path_components})
             if as_filename and not result.endswith(path.suffix):
                 result += path.suffix
             return Path(result).relative_to('/')
@@ -386,11 +405,8 @@ class CopyTransformer(BaseTransformer):
                 f' - metadata: {self.metadata}'
             ) from exc
 
-    def get_permalink(self) -> Path:
-        return self._get_path()
-
     def get_output_path(self) -> Path:
-        return self._get_path(as_filename=True)
+        return cast(Path, self.metadata['file'])
 
 
 class TextTransformer(BaseTransformer, ABC):

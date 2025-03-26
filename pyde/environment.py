@@ -53,26 +53,28 @@ class Environment:
         self.posts_dir = exec_dir / self.config.posts.source
         self.tags_dir = exec_dir / self.config.tags.path
         self.root = exec_dir / self.config.root
+        self._site = SiteFileManager(self.config.url)
         self.template_manager = TemplateManager(
             self.config.url,
             exec_dir / self.includes_dir,
             exec_dir / self.layouts_dir,
             globals={
-                'site': Data(url=self.config.url),
+                'site': self._site,
                 'pyde': pyde,
                 'jekyll': pyde,
             },
         )
-        self.site = SiteFileManager(self.config.url)
+
+    @property
+    def site(self) -> SiteFileManager:
+        return self._site.load(self.transforms())
 
     def build(self) -> None:
         self.output_dir.mkdir(exist_ok=True)
         # Check to see what already exists in the output directory.
         existing_files = set(self.output_dir.rglob('*'))
-        site = self.site_files()
-        self.template_manager.globals['site'] = site
         built_files = (
-            file.render(self.root, self.output_dir) for file in site
+            file.render(self.root, self.output_dir) for file in self.site
         )
         # Grab the output files and all the parent directories that might have
         # been created as part of the build.
@@ -128,9 +130,6 @@ class Environment:
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
             yield tf.pipe(template=template, page=tf.metadata)
-
-    def site_files(self) -> SiteFileManager:
-        return self.site.load(self.transforms())
 
     def get_default_values(self, source: Path) -> dict[str, Any]:
         values = {}
@@ -195,21 +194,26 @@ class SiteFileManager(Iterable[SiteFile]):
         self._loaded = False
         self.url = url
 
-    @property
-    def pages(self) -> Iterable[SiteFile]:
-        return self._files.get('page', ())
+    def _page_data(self, type: SiteFileType) -> Iterable[Mapping[str, Any]]:
+        return [
+            f.metadata for f in self._files.get(type, ())
+        ]
 
     @property
-    def posts(self) -> Iterable[SiteFile]:
-        return self._files.get('post', ())
+    def pages(self) -> Iterable[Mapping[str, Any]]:
+        return self._page_data('page')
 
     @property
-    def raw(self) -> Iterable[SiteFile]:
-        return self._files.get('raw', ())
+    def posts(self) -> Iterable[Mapping[str, Any]]:
+        return self._page_data('post')
 
     @property
-    def meta(self) -> Iterable[SiteFile]:
-        return self._files.get('meta', ())
+    def raw(self) -> Iterable[Mapping[str, Any]]:
+        return self._page_data('raw')
+
+    @property
+    def meta(self) -> Iterable[Mapping[str, Any]]:
+        return self._page_data('meta')
 
     @classmethod
     def site_file(cls, tf: Transformer) -> SiteFile:

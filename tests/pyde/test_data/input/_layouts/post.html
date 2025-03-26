@@ -10,6 +10,7 @@
 	<body>
 		{% include header.html %}
 		<main>
+		<h2><a href="{{ page.path }}">{{ page.title }}</a></h2>
 		<div id="word-count">Word count: {{ page.word_count }}</div>
 		{{ content }}
 		</main>

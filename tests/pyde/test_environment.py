@@ -136,7 +136,6 @@ def test_site_files(
     type: str, results: set[str]
 ) -> None:
     env = get_env(drafts=True)
-    files = env.site_files()
     assert set(
-        str(file.outputs) for file in getattr(files, type)
+        str(file['file']) for file in getattr(env.site, type)
     ) == results
