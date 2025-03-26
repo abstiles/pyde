@@ -13,7 +13,6 @@ from typing import (
     Generic,
     Iterable,
     Iterator,
-    Never,
     TypeGuard,
     TypeVar,
     cast,
@@ -247,7 +246,7 @@ def dict_to_dataclass(cls: type['DC_T'], data: Mapping[str, Any]) -> 'DC_T':
         return cls(val)  # type: ignore
 
     coerced_data: dict[str, Any] = {
-        key: coerce(types.get(key, object), val)
+        key: coerce(types.get(key, object), val)  # type: ignore
         for key, val in data.items()
     }
     return cls(**coerced_data)
@@ -258,16 +257,61 @@ K2 = TypeVar('K2')
 V1 = TypeVar('V1')
 V2 = TypeVar('V2')
 
-def _both_mapping(d1: Any, d2: Any) -> bool:
+def _both_mapping(
+    pair: tuple[Any, Any]
+) -> TypeGuard[tuple[Mapping[Any, Any], Mapping[Any, Any]]]:
+    d1, d2 = pair
     return isinstance(d1, Mapping) and isinstance(d2, Mapping)
 
-def merge_dicts(d1: dict[K1, V1], d2: dict[K2, V2]) -> dict[K1 | K2, V1 | V2]:
-    try:
-        return {
-            k: merge_dicts(d1[k], d2[k])  # type: ignore
-            if _both_mapping(d1.get(k), d2.get(k))  # type: ignore
-            else d2.get(k, d1.get(k))  # type: ignore
-            for k in set(d1) | set(d2)
-        }
-    except KeyError:
-        raise Exception(f'd1: {d1} - d2: {d2}')
+def merge_dicts(
+    orig: Mapping[K1, V1],
+    update: Mapping[K2, V2]
+) -> Mapping[K1 | K2, V1 | V2]:
+    d1 = cast(Mapping[K1 | K2, V1], orig)
+    d2 = cast(Mapping[K1 | K2, V2], update)
+    result: Mapping[K1 | K2, V1 | V2] = {
+        k: merge_dicts(*dicts) if _both_mapping(dicts := (d1.get(k), d2.get(k)))
+        else d2.get(k, d1.get(k))  # type: ignore
+        for k in set(d1) | set(d2)
+    }
+    return result
+
+
+@overload
+def seq_pivot(
+    seq: Sequence[Mapping[T, U]], index: T, /,
+) -> Mapping[U, Sequence[Mapping[T, U]]]: ...
+@overload
+def seq_pivot(
+    seq: Iterable[U], /, *, attr: str,
+) -> Mapping[Any, Sequence[U]]: ...
+def seq_pivot(  # type: ignore [misc]
+    seq: Iterable[Mapping[T, U]] | Iterable[U],
+    index: T | None=None,
+    /, *, attr: str='',
+) -> Mapping[U, Sequence[Mapping[T, U]]] | Mapping[Any, Sequence[U]]:
+    if attr:
+        seq = cast(Iterable[U], seq)
+        return seq_pivot_object(seq, attr)
+    seq = cast(Iterable[Mapping[T, U]], seq)
+    return seq_pivot_mapping(seq, cast(T, index))
+
+
+def seq_pivot_mapping(
+    seq: Iterable[Mapping[T, U]], index: T,
+) -> Mapping[U, Sequence[Mapping[T, U]]]:
+    result: dict[U, list[Mapping[T, U]]]  = {}
+    for item in seq:
+        if index in item:
+            result.setdefault(item[index], []).append(item)
+    return result
+
+
+def seq_pivot_object(
+    seq: Iterable[U], index: str,
+) -> Mapping[Any, Sequence[U]]:
+    result: dict[Any, list[U]]  = {}
+    for item in seq:
+        if hasattr(item, index):
+            result.setdefault(getattr(item, index), []).append(item)
+    return result

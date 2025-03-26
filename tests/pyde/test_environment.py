@@ -9,13 +9,15 @@ from pyde.config import Config
 from pyde.environment import Environment
 from pyde.utils import dict_to_dataclass
 
+from ..test import parametrize
+
 TEST_DATA_DIR = Path(__file__).parent / 'test_data'
 IN_DIR = Path('input')
 OUT_DIR = TEST_DATA_DIR / 'output'
 EXPECTED_DIR = TEST_DATA_DIR / 'expected'
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def output_dir() -> Iterable[Path]:
     OUT_DIR.mkdir(exist_ok=True)
     yield OUT_DIR
@@ -35,7 +37,7 @@ def get_config(**kwargs: Any) -> Config:
             'permalink': '/:path/:name',
             'defaults': [
                 {'values': {'layout': 'default'}},
-                {'scope': {'path': 'posts'}, 'values': {'layout': 'post'}},
+                {'scope': {'path': '_posts'}, 'values': {'layout': 'post'}},
                 {
                     'scope': {'path': '_drafts'},
                     'values': {'permalink': '/drafts/:title'},
@@ -60,18 +62,24 @@ DRAFT_FILES = {'_drafts/unfinished_post.md'}
 SOURCE_FILES = {
     'index.md',
     'js/script.js',
-    'posts/post.md',
+    '_posts/post.md',
     'styles/base.css',
 }
-OUTPUT_FILES = {
-    'index.html',
+RAW_OUTPUTS = {
     'js/script.js',
-    'posts/post.html',
     'styles/base.css',
 }
-DRAFT_OUTPUT_FILES = OUTPUT_FILES | {
+PAGE_OUTPUTS = {
+    'index.html',
+}
+DRAFT_OUTPUTS = {
     'drafts/WIP.html',
 }
+POST_OUTPUTS = {
+    'posts/post.html',
+}
+OUTPUT_FILES = RAW_OUTPUTS | PAGE_OUTPUTS | POST_OUTPUTS
+DRAFT_OUTPUT_FILES = OUTPUT_FILES | DRAFT_OUTPUTS
 
 def test_environment_source_files() -> None:
     env = get_env()
@@ -97,24 +105,38 @@ def test_environment_output_drafts() -> None:
     env = get_env(drafts=True)
     assert set(map(str, env.output_files())) == DRAFT_OUTPUT_FILES
 
-def test_build(output_dir: Path) -> None:
+def test_build() -> None:
     env = get_env(drafts=True)
-    env.build(output_dir)
+    env.build()
     for file in DRAFT_OUTPUT_FILES:
         expected = EXPECTED_DIR / file
-        actual = output_dir / file
+        actual = OUT_DIR / file
 
         assert actual.exists()
         assert actual.read_text().rstrip() == expected.read_text().rstrip()
 
-def test_build_cleanup(output_dir: Path) -> None:
-    dirty_file = output_dir / "inner" / "dirty.txt"
+def test_build_cleanup() -> None:
+    dirty_file = OUT_DIR / "inner" / "dirty.txt"
     dirty_file.parent.mkdir(parents=True, exist_ok=True)
     dirty_file.write_text("I shouldn't be here!")
 
-    get_env(drafts=True).build(output_dir)
+    get_env(drafts=True).build()
 
     assert not dirty_file.exists()
-    for parent in dirty_file.relative_to(output_dir).parents:
+    for parent in dirty_file.relative_to(OUT_DIR).parents:
         if parent != Path('.'):
-            assert not (output_dir / parent).exists()
+            assert not (OUT_DIR / parent).exists()
+
+@parametrize(
+    ['raw', RAW_OUTPUTS],
+    ['pages', PAGE_OUTPUTS],
+    ['posts', POST_OUTPUTS | DRAFT_OUTPUTS],
+)
+def test_site_files(
+    type: str, results: set[str]
+) -> None:
+    env = get_env(drafts=True)
+    files = env.site_files()
+    assert set(
+        str(file.outputs) for file in getattr(files, type)
+    ) == results

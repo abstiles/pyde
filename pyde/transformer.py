@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, AnyStr, ClassVar, Protocol, Self, Type, c
 from jinja2 import Template
 from markupsafe import Markup
 
-from .data import Data
 from .markdown import markdownify
 from .utils import Maybe, ilen, merge_dicts
 from .yaml import parse_yaml_dict
@@ -165,12 +164,17 @@ class BaseTransformer(Transformer, TransformerType):
     def __init__(
         self,
         source: Path,
-        /, **kwargs: Any,
+        /, *,
+        parse_frontmatter: bool=True,
+        permalink: str=DEFAULT_PERMALINK,
+        template: Template | None=None,
+        metaprocessor: MetaProcessor | None=None,
+        **meta: Any,
     ):
         super().__init__()
-        _ = kwargs
+        _ = parse_frontmatter, permalink, template, metaprocessor
         self._source = source
-        self._meta = {}
+        self._meta = meta
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}({str(self.source)!r})'
@@ -311,7 +315,7 @@ class PipelineTransformer(BaseTransformer):
                 *next_pipeline,
                 *next_copytf,
             ]
-        return PipelineTransformer(self.source, pipeline=pipeline)
+        return PipelineTransformer(self.source, pipeline=pipeline).set_meta(self._meta)
 
     @classmethod
     def build(
@@ -339,10 +343,12 @@ class CopyTransformer(BaseTransformer):
         source: Path,
         /, *,
         permalink: str=DEFAULT_PERMALINK,
+        collection_root: Path=Path('.'),
         **meta: Any,
     ):
         super().__init__(source, **meta)
         self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
+        self._collection_root = collection_root
 
     def __repr__(self) -> str:
         return (
@@ -363,8 +369,10 @@ class CopyTransformer(BaseTransformer):
     def _get_path(self, as_filename: bool=False) -> Path:
         path = self._source.parent / self.transformed_name()
         path_components = {
-            'path': path.parent, 'name': path.name,
-            'basename': path.stem, 'ext': path.suffix,
+            'path': path.parent.relative_to(self._collection_root),
+            'name': path.name,
+            'basename': path.stem,
+            'ext': path.suffix,
         }
 
         try:

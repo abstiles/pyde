@@ -1,7 +1,7 @@
 """
 Handle config file parsing
 """
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from functools import partial
 from glob import glob
 from os import PathLike
@@ -55,8 +55,36 @@ ScopeSpec.ALL = ScopeSpec()
 @dataclass(frozen=True)
 class DefaultSpec:
     scope: ScopeSpec = ScopeSpec.ALL
-    values: dict[str, str] = field(default_factory=dict)
+    values: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def make(cls, scope: Path, /, **values: Any) -> 'DefaultSpec':
+        return cls(ScopeSpec(scope), values)
+
+
+@dataclass(frozen=True)
+class TagSpec:
+    enabled: bool = True
+    path: Path = Path('tag')
+    template: str = 'default'
+
+@dataclass(frozen=True)
+class CollectionSpec:
+    name: str
+    source: Path = field(init=False)
+    source_dir: InitVar[Path | str] = '_:collection'
+    permalink: str = '/:collection/:path/:basename'
+
+    def __post_init__(self, source_dir: Path | str) -> None:
+        if isinstance(source_dir, Path):
+            object.__setattr__(self, 'source', source_dir)
+        else:
+            object.__setattr__(
+                self, 'source', source_dir.replace(':collection', self.name)
+            )
+        object.__setattr__(
+            self, 'permalink', self.permalink.replace(':collection', self.name)
+        )
 
 @dataclass
 class Config:
@@ -73,6 +101,19 @@ class Config:
     layouts_dir: Path = Path('_layouts')
     includes_dir: Path = Path('_includes')
     drafts_dir: Path = Path('_drafts')
+    posts: CollectionSpec = CollectionSpec('posts')
+    tags: TagSpec = TagSpec()
+
+    def __post_init__(self) -> None:
+        self.defaults.extend([
+            DefaultSpec.make(
+                self.posts.source, type='post',
+                collection_root=Path(self.posts.source),
+                permalink=self.posts.permalink
+            ),
+            DefaultSpec.make(self.drafts_dir, type='post', draft=True),
+            DefaultSpec.make(self.tags.path, type='meta'),
+        ])
 
     def iter_files(self) -> Iterable[SourceFile]:
         """Iterate through all files included in the build"""

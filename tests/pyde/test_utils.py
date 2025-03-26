@@ -1,7 +1,7 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from pyde.utils import dict_to_dataclass
+from pyde.utils import dict_to_dataclass, seq_pivot
 
 
 @dataclass
@@ -25,3 +25,28 @@ def test_dict_to_dataclass() -> None:
     outer2 = Outer(inner=inner2, path=Path('/path/elsewhere.txt'))
     with_list = WithList(items=[outer1, outer2])
     assert dict_to_dataclass(WithList, asdict(with_list)) == with_list
+
+def test_seq_pivot() -> None:
+    seq = [
+        {'type': 'one', 'value': 1},
+        {'type': 'two', 'value': 2},
+        {'type': 'three', 'value': 3},
+        {'type': 'one', 'value': 4},
+        {'type': 'two', 'value': 5},
+        {'type': 'three', 'value': 6},
+    ]
+    expected = {
+        'one': [
+            {'type': 'one', 'value': 1},
+            {'type': 'one', 'value': 4},
+        ],
+        'two': [
+            {'type': 'two', 'value': 2},
+            {'type': 'two', 'value': 5},
+        ],
+        'three': [
+            {'type': 'three', 'value': 3},
+            {'type': 'three', 'value': 6},
+        ],
+    }
+    assert seq_pivot(seq, 'type') == expected

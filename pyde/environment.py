@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import dataclasses
 import re
 import shutil
@@ -12,18 +13,22 @@ from typing import (
     Any,
     Callable,
     Iterable,
+    Iterator,
     Literal,
+    Self,
     TypeAlias,
     TypeGuard,
     TypeVar,
     overload,
 )
 
+from pyde.url import UrlPath
+
 from .config import Config
 from .data import Data
 from .templates import TemplateManager
 from .transformer import CopyTransformer, Transformer
-from .utils import flatmap
+from .utils import flatmap, seq_pivot
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -45,8 +50,8 @@ class Environment:
         self.layouts_dir = exec_dir / self.config.layouts_dir
         self.output_dir = exec_dir / self.config.output_dir
         self.drafts_dir = exec_dir / self.config.drafts_dir
-        self.posts_dir = exec_dir / self.config.posts_dir
-        self.tags_dir = exec_dir / self.config.tags.tags_path
+        self.posts_dir = exec_dir / self.config.posts.source
+        self.tags_dir = exec_dir / self.config.tags.path
         self.root = exec_dir / self.config.root
         self.template_manager = TemplateManager(
             self.config.url,
@@ -58,30 +63,20 @@ class Environment:
                 'jekyll': pyde,
             },
         )
-        self.site_filer = SiteFiler(self)
+        self.site = SiteFileManager(self.config.url)
 
-    def site_globals(self) -> dict[str, Any]:
-        pyde = Data(
-            drafts=self.config.drafts,
-            environment="development" if self.config.drafts else "production"
-        )
-        return {
-            'site': Data(url=self.config.url),
-            'pyde': pyde,
-            'jekyll': pyde,
-        }
-
-    def build(self, output_dir: Path) -> None:
-        output_dir.mkdir(exist_ok=True)
+    def build(self) -> None:
+        self.output_dir.mkdir(exist_ok=True)
         # Check to see what already exists in the output directory.
-        existing_files = set(output_dir.rglob('*'))
+        existing_files = set(self.output_dir.rglob('*'))
+        site = self.site_files()
+        self.template_manager.globals['site'] = site
         built_files = (
-            tf.transform_file(self.config.root, output_dir)
-            for tf in self.transforms()
+            file.render(self.root, self.output_dir) for file in site
         )
         # Grab the output files and all the parent directories that might have
         # been created as part of the build.
-        outputs = flatmap(file_and_parents(upto=output_dir), built_files)
+        outputs = flatmap(file_and_parents(upto=self.output_dir), built_files)
         for file in outputs:
             existing_files.discard(file)
         for file in existing_files:
@@ -127,16 +122,22 @@ class Environment:
             if not self.should_transform(source):
                 yield CopyTransformer(source)
                 continue
-            values = {}
-            for default in self.config.defaults:
-                if default.scope.matches(source):
-                    values.update(default.values)
-            tf = Transformer(source, **(base | values)).preprocess(self.config.root)
+            values = self.get_default_values(source)
+            tf = Transformer(source, **(base | values)).preprocess(self.root)
             layout = tf.metadata.get('layout', values['layout'])
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
-            tf = tf.pipe(template=template, page=tf.metadata)
-            yield tf
+            yield tf.pipe(template=template, page=tf.metadata)
+
+    def site_files(self) -> SiteFileManager:
+        return self.site.load(self.transforms())
+
+    def get_default_values(self, source: Path) -> dict[str, Any]:
+        values = {}
+        for default in self.config.defaults:
+            if default.scope.matches(source):
+                values.update(default.values)
+        return values
 
     def should_transform(self, source: Path) -> bool:
         """Return true if this file should be transformed in some way."""
@@ -167,40 +168,72 @@ class Environment:
         return self._tree(self.drafts_dir)
 
 
-SiteFileType: TypeAlias = Literal['post', 'page', 'raw']
+SiteFileType: TypeAlias = Literal['post', 'page', 'raw', 'meta']
 
 class SiteFile:
-    def __init__(self, env: Environment, tf: Transformer, type: SiteFileType):
-        self.env, self.tf, self.type = env, tf, type
+    def __init__(self, tf: Transformer, type: SiteFileType):
+        self.tf, self.type = tf, type
         self.metadata = Data(tf.metadata)
 
-    def render(self) -> None:
-        self.tf.transform_file(
-            self.env.root,
-            self.env.output_dir,
-        )
+    def render(self, input_dir: Path, output_dir: Path) -> Path:
+        result = self.tf.transform_file(input_dir, output_dir)
         self.metadata = Data(self.tf.metadata)
+        return result
+
+    @property
+    def source(self) -> Path:
+        return self.tf.source
+
+    @property
+    def outputs(self) -> Path:
+        return self.tf.outputs
 
 
-class SiteFiler:
-    def __init__(self, env: Environment):
-        self.env = env
+class SiteFileManager(Iterable[SiteFile]):
+    def __init__(self, url: UrlPath):
+        self._files: Mapping[SiteFileType, Iterable[SiteFile]] = {}
+        self._loaded = False
+        self.url = url
 
-    def page(self, tf: Transformer) -> SiteFile:
-        return SiteFile(self.env, tf, 'page')
+    @property
+    def pages(self) -> Iterable[SiteFile]:
+        return self._files.get('page', ())
 
-    def post(self, tf: Transformer) -> SiteFile:
-        return SiteFile(self.env, tf, 'post')
+    @property
+    def posts(self) -> Iterable[SiteFile]:
+        return self._files.get('post', ())
 
-    def raw(self, tf: Transformer) -> SiteFile:
-        return SiteFile(self.env, tf, 'raw')
+    @property
+    def raw(self) -> Iterable[SiteFile]:
+        return self._files.get('raw', ())
 
-    def __call__(self, tf: Transformer) -> SiteFile:
+    @property
+    def meta(self) -> Iterable[SiteFile]:
+        return self._files.get('meta', ())
+
+    @classmethod
+    def site_file(cls, tf: Transformer) -> SiteFile:
         if isinstance(tf, CopyTransformer):
-            return self.raw(tf)
+            return SiteFile(tf, 'raw')
+        if type := tf.metadata.get('type'):
+            return SiteFile(tf, type)
         if tf.source.suffix in ('.md', '.html'):
-            return self.page(tf)
-        return self.raw(tf)
+            return SiteFile(tf, 'page')
+        return SiteFile(tf, 'raw')
+
+    def load(self, transformers: Iterable[Transformer]) -> Self:
+        if self._loaded:
+            return self
+        site_files = map(self.site_file, transformers)
+        self._files = seq_pivot(site_files, attr='type')
+        self._loaded = True
+        return self
+
+    def __iter__(self) -> Iterator[SiteFile]:
+        type_ordering: Iterable[SiteFileType] = (
+            'post', 'page', 'meta', 'raw')
+        for file_type in type_ordering:
+            yield from self._files.get(file_type, ())
 
 
 def _not_none(item: T | None) -> TypeGuard[T]:
