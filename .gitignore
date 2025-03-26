@@ -1,4 +1,4 @@
 *.swp
 *.egg-info
-_*
+/_*
 **/test_data/output

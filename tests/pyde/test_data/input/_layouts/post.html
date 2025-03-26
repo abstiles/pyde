@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en-US">
+	<head>
+		<title>{{ page.title }}</title>
+		<link rel="stylesheet" href="/styles/page.css">
+		<script src="/js/script.js" type="module"></script>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta charset="UTF-8">
+	</head>
+	<body>
+		{% include header.html %}
+		<main>
+		<div id="word-count">Word count: {{ page.word_count }}</div>
+		{{ content }}
+		</main>
+	</body>
+</html>
