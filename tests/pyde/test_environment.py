@@ -10,7 +10,7 @@ from pyde.environment import Environment
 from pyde.utils import dict_to_dataclass
 
 TEST_DATA_DIR = Path(__file__).parent / 'test_data'
-IN_DIR = TEST_DATA_DIR / 'input'
+IN_DIR = Path('input')
 OUT_DIR = TEST_DATA_DIR / 'output'
 EXPECTED_DIR = TEST_DATA_DIR / 'expected'
 
@@ -30,12 +30,8 @@ def get_config(**kwargs: Any) -> Config:
     return dict_to_dataclass(
         Config,
         {
-            'root': IN_DIR,
             'url': 'https://www.example.com',
-            'layouts_dir': IN_DIR / '_layouts',
-            'includes_dir': IN_DIR / '_includes',
-            'drafts_dir': IN_DIR / '_drafts',
-            'output_dir': IN_DIR / '_site',
+            'output_dir': OUT_DIR,
             'permalink': '/:path/:name',
             'defaults': [
                 {'values': {'layout': 'default'}},
@@ -51,7 +47,7 @@ def get_config(**kwargs: Any) -> Config:
 
 
 def get_env(**kwargs: Any) -> Environment:
-    return Environment(get_config(**kwargs), exec_dir=IN_DIR)
+    return Environment(get_config(**kwargs), exec_dir=TEST_DATA_DIR / IN_DIR)
 
 
 LAYOUT_FILES = {

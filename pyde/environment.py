@@ -41,10 +41,17 @@ class Environment:
         )
         self.config = config
         self.exec_dir = exec_dir
+        self.includes_dir = exec_dir / self.config.includes_dir
+        self.layouts_dir = exec_dir / self.config.layouts_dir
+        self.output_dir = exec_dir / self.config.output_dir
+        self.drafts_dir = exec_dir / self.config.drafts_dir
+        self.posts_dir = exec_dir / self.config.posts_dir
+        self.tags_dir = exec_dir / self.config.tags.tags_path
+        self.root = exec_dir / self.config.root
         self.template_manager = TemplateManager(
             self.config.url,
-            self.config.includes_dir,
-            self.config.layouts_dir,
+            exec_dir / self.includes_dir,
+            exec_dir / self.layouts_dir,
             globals={
                 'site': Data(url=self.config.url),
                 'pyde': pyde,
@@ -85,7 +92,7 @@ class Environment:
                 file.unlink(missing_ok=True)
 
     def source_files(self) -> Iterable[Path]:
-        globber = partial(iterglob, root=self.config.root)
+        globber = partial(iterglob, root=self.root)
         exclude_patterns = set(filter(_not_none, [
             self.config.output_dir,
             self.config.layouts_dir,
@@ -94,13 +101,13 @@ class Environment:
             *self.config.exclude,
         ]))
         if not self.config.drafts:
-            exclude_patterns.add('_drafts')
+            exclude_patterns.add(self.config.drafts_dir)
         excluded = set(flatmap(globber, exclude_patterns))
         excluded_dirs = set(filter(Path.is_dir, excluded))
         included = set(flatmap(globber, self.config.include))
         files = set(flatmap(globber, set(['**'])))
         yield from {
-            file.relative_to(self.config.root)
+            file.relative_to(self.root)
             for file in filter(Path.is_file, files - excluded)
             if file in included or not excluded_dirs.intersection(file.parents)
         }
@@ -133,7 +140,7 @@ class Environment:
 
     def should_transform(self, source: Path) -> bool:
         """Return true if this file should be transformed in some way."""
-        with (self.config.root / source).open('rb') as f:
+        with (self.root / source).open('rb') as f:
             header = f.read(5)
             if HEADER_RE.match(header):
                 return True
@@ -145,19 +152,19 @@ class Environment:
 
     def _tree(self, dir: Path) -> Iterable[Path]:
         return (
-            f.relative_to(self.exec_dir.absolute())
+            f.relative_to(self.root.absolute())
             for f in dir.absolute().rglob('*')
             if not f.name.startswith('.')
         )
 
     def layout_files(self) -> Iterable[Path]:
-        return self._tree(self.config.layouts_dir)
+        return self._tree(self.layouts_dir)
 
     def include_files(self) -> Iterable[Path]:
-        return self._tree(self.config.includes_dir)
+        return self._tree(self.includes_dir)
 
     def draft_files(self) -> Iterable[Path]:
-        return self._tree(self.config.drafts_dir)
+        return self._tree(self.drafts_dir)
 
 
 SiteFileType: TypeAlias = Literal['post', 'page', 'raw']
@@ -169,8 +176,8 @@ class SiteFile:
 
     def render(self) -> None:
         self.tf.transform_file(
-            self.env.config.root,
-            self.env.config.output_dir
+            self.env.root,
+            self.env.output_dir,
         )
         self.metadata = Data(self.tf.metadata)
 
