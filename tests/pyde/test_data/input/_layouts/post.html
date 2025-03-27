@@ -8,11 +8,15 @@
 		<meta charset="UTF-8">
 	</head>
 	<body>
+		{% filter indent(width='\t\t') -%}
 		{% include header.html %}
+		{%- endfilter %}
 		<main>
-		<h2><a href="{{ page.path }}">{{ page.title }}</a></h2>
-		<div id="word-count">Word count: {{ page.word_count }}</div>
-		{{ content }}
+			<h2><a href="{{ page.path }}">{{ page.title }}</a></h2>
+			<div id="word-count">Word count: {{ page.word_count }}</div>
+			{% filter indent(width='\t\t\t') -%}
+			{{ content }}
+			{%- endfilter %}
 		</main>
 	</body>
 </html>

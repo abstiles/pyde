@@ -8,9 +8,13 @@
 		<meta charset="UTF-8">
 	</head>
 	<body>
+		{% filter indent(width='\t\t') -%}
 		{% include header.html %}
+		{%- endfilter %}
 		<main>
-		{{ content }}
+			{% filter indent(width='\t\t\t') %}
+			{{- content }}
+			{%- endfilter %}
 		</main>
 	</body>
 </html>

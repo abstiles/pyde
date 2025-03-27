@@ -129,7 +129,7 @@ class Environment:
             layout = tf.metadata.get('layout', values['layout'])
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
-            yield tf.pipe(template=template, page=tf.metadata)
+            yield tf.pipe(template=template, page=tf.metadata['page'])
 
     def get_default_values(self, source: Path) -> dict[str, Any]:
         values = {}

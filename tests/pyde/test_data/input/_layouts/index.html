@@ -8,9 +8,24 @@
 		<meta charset="UTF-8">
 	</head>
 	<body>
+		{% filter indent(width='\t\t') -%}
 		{% include header.html %}
+		{%- endfilter %}
 		<main>
-		{{ content }}
+			{% filter indent(width='\t\t\t') -%}
+			{{ content }}
+			{%- endfilter %}
+			{%- for post in site.posts | sort(attribute='title') %}
+			<div class="post">
+				<div class="post-title">{{ post.title }}</div>
+				<div class="word-count">Word count: {{ post.word_count }}</div>
+				<div class="excerpt">
+					{%- filter indent(width='\t\t\t\t\t') %}
+					{{ post.excerpt }}
+					{%- endfilter %}
+				</div>
+			</div>
+			{%- endfor %}
 		</main>
 	</body>
 </html>

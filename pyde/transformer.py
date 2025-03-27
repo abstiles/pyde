@@ -81,7 +81,7 @@ class Transformer(TransformerType):
         metaprocessor: MetaProcessor | None=None,
         **meta: Any,
     ) -> Transformer:
-        _ = source, permalink, meta
+        _ = source, meta
         if cls is Transformer:
             transformers: list[type[Transformer]] = []
             if parse_frontmatter:
@@ -249,12 +249,14 @@ class PipelineTransformer(BaseTransformer):
     def __init__(
         self, source: Path, /, *,
         pipeline: Sequence[Transformer]=UNSET,
+        permalink: str=DEFAULT_PERMALINK,
         **meta: Any
     ):
         super().__init__(source, **meta)
         if pipeline is not UNSET:
             self._pipeline = pipeline
         self._preprocessed = None
+        self._permalink = permalink
 
     def __getitem__(self, idx: int | slice) -> Transformer | PipelineTransformer:
         if isinstance(idx, slice):
@@ -284,7 +286,9 @@ class PipelineTransformer(BaseTransformer):
         return meta_tf, tfs, copy_tf
 
     def pipe(self, **meta: Any) -> Transformer:
-        next = cast(PipelineTransformer, Transformer(self.outputs, **meta))
+        next = cast(PipelineTransformer,
+            Transformer(self.outputs, permalink=self._permalink, **meta)
+        )
         if (src_path := self._preprocessed) is not None:
             next[0].set_meta(self.metadata)
             next[1:].set_meta(self.metadata).preprocess(src_path)
@@ -349,19 +353,10 @@ class CopyTransformer(BaseTransformer):
         super().__init__(source, **meta)
         self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
         self._collection_root = collection_root
-        try:
-            # Attempt to build the path immediately. For a bare
-            # CopyTransformer, we should have all the info we need to do that
-            # without a preprocess step.
-            self._generate_path_info()
-        except ValueError:
-            # An error here means we might need preprocessed metadata to
-            # assemble the destination path.
-            pass
 
     def _generate_path_info(self) -> Self:
         self._meta['file'] = self._get_path(as_filename=True)
-        self._meta['path'] = Path('/') / self._get_path()
+        self._meta.setdefault('page', {})['path'] = Path('/') / self._get_path()
         return self
 
     def preprocess(self, src_root: Path) -> Self:
@@ -398,7 +393,10 @@ class CopyTransformer(BaseTransformer):
             result = self._permalink.format(**{**self.metadata, **path_components})
             if as_filename and not result.endswith(path.suffix):
                 result += path.suffix
-            return Path(result).relative_to('/')
+            page_path = Path(result)
+            if not as_filename and page_path.stem == 'index':
+                page_path = page_path.parent
+            return Path(page_path).relative_to('/')
         except KeyError as exc:
             raise ValueError(
                 f'Cannot create filename from metadata element {exc}'
@@ -406,7 +404,11 @@ class CopyTransformer(BaseTransformer):
             ) from exc
 
     def get_output_path(self) -> Path:
-        return cast(Path, self.metadata['file'])
+        try:
+            return cast(Path, self.metadata['file'])
+        except KeyError:
+            self._generate_path_info()
+            return cast(Path, self.metadata['file'])
 
 
 class TextTransformer(BaseTransformer, ABC):
@@ -427,7 +429,6 @@ class MarkdownTransformer(TextTransformer, pattern='*.md'):
 
     def transform_text(self, text: str) -> str:
         html = markdownify(text)
-        page = {}
         page = self._meta.setdefault('page', {})
         try:
             page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
@@ -444,6 +445,7 @@ class TemplateApplyTransformer(TextTransformer):
     def __init__(self, source: Path, /, *, template: Template, **meta: Any):
         super().__init__(source)
         self._template = template
+        del meta['permalink']
         self._meta = meta
 
     def __repr__(self) -> str:
@@ -483,9 +485,9 @@ class MetaTransformer(TextTransformer):
 
     def transform_text(self, text: str) -> str:
         frontmatter, content = self.split_frontmatter(text)
-        self._meta.update(
-            parse_yaml_dict(frontmatter) if frontmatter else {}
-        )
+        metadata = parse_yaml_dict(frontmatter) if frontmatter else {}
+        self._meta.update(metadata)
+        self._meta.setdefault('page', {}).update(metadata)
         return content
 
     @staticmethod

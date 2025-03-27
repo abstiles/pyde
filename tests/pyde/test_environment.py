@@ -34,7 +34,7 @@ def get_config(**kwargs: Any) -> Config:
         {
             'url': 'https://www.example.com',
             'output_dir': OUT_DIR,
-            'permalink': '/:path/:name',
+            'permalink': '/:path/:basename',
             'defaults': [
                 {'values': {'layout': 'default'}},
                 {'scope': {'path': '_posts'}, 'values': {'layout': 'post'}},
