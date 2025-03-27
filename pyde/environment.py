@@ -122,7 +122,7 @@ class Environment:
         }
         for source in self.source_files():
             if not self.should_transform(source):
-                yield CopyTransformer(source)
+                yield CopyTransformer(source, file=source)
                 continue
             values = self.get_default_values(source)
             tf = Transformer(source, **(base | values)).preprocess(self.root)
