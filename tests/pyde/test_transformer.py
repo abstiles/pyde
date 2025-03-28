@@ -1,6 +1,6 @@
 from pathlib import Path
 from textwrap import dedent
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import Template
 
@@ -33,7 +33,7 @@ def test_markdown_transform() -> None:
 
 def test_template_transform() -> None:
     path = Path('path/to/post.txt')
-    template = Template('Hello {{ content }}, {{ name }}')
+    template = Template('Hello {{ content }}, {{ page.name }}')
     tf = Transformer(
         path, template=template, name='friend'
     )
@@ -130,7 +130,7 @@ def test_metadata_on_template() -> None:
         '''\
             <html>
                 <body>
-                    <h1>{{ title }}</h1>
+                    <h1>{{ page.title }}</h1>
                     {{ content }}
                 </body>
             </html>
@@ -149,3 +149,102 @@ def test_metadata_on_template() -> None:
             </html>
         '''
     ).rstrip()
+
+
+class FakePath:
+    def __init__(self, path: Path | str, content: str=''):
+        self._content = content
+        self._path = Path(path)
+
+    def __str__(self) -> str:
+        return str(self._path)
+
+    def __repr__(self) -> str:
+        return f'FakePath({str(self._path)!r}, content={self._content!r})'
+
+    def _with_path(self, path: Path) -> 'FakePath':
+        return FakePath(path, self._content)
+
+    def __eq__(self, other: object) -> bool:
+        return self._path == other
+
+    @property
+    def name(self) -> str:
+        return self._path.name
+
+    @property
+    def stem(self) -> str:
+        return self._path.stem
+
+    @property
+    def suffix(self) -> str:
+        return self._path.suffix
+
+    def with_suffix(self, suffix: str) -> 'FakePath':
+        return self._with_path(self._path.with_suffix(suffix))
+
+    def match(self, pattern: str) -> bool:
+        return self._path.match(pattern)
+
+    def relative_to(self, other: str | Path) -> 'FakePath':
+        return self._with_path(self._path.relative_to(other))
+
+    @property
+    def parent(self) -> 'FakePath':
+        return self._with_path(self._path.parent)
+
+    @property
+    def parents(self) -> list['FakePath']:
+        return [*map(FakePath, self._path.parents)]
+
+    def __truediv__(self, other: Any) -> 'FakePath':
+        return self._with_path(self._path / other)
+
+    def __rtruediv__(self, other: Any) -> 'FakePath':
+        return self._with_path(other / self._path)
+
+    def read_bytes(self) -> bytes:
+        return self._content.encode('utf8')
+
+    def read_text(self) -> str:
+        return self._content
+
+    def write_bytes(self, data: bytes) -> None:
+        self._content = data.decode('utf8')
+
+    def write_text(self, data: str) -> None:
+        self._content = data
+
+
+def test_metadata_joined() -> None:
+    path = cast(Path, FakePath(
+        'path/to/post.md',
+        content=dedent(
+            '''\
+                ---
+                title: Some Title
+                ---
+                Hello, world!
+            '''
+        ),
+    ))
+    template_str = dedent(
+        '''\
+            <html>
+                <body>
+                    <h1>{{ title }}</h1>
+                    {{ content }}
+                </body>
+            </html>
+        '''
+    )
+    template = Template(template_str)
+    tf = Transformer(path, template=template, permalink='/:path/:basename')
+    tf.preprocess(Path('.')).transform_from_file(Path('.'))
+    assert tf.metadata == {
+        'path': Path('/path/to/post'),
+        'file': Path('path/to/post.html'),
+        'title': 'Some Title',
+        'word_count': 2,
+        'excerpt': '<p>Hello, world!</p>',
+    }

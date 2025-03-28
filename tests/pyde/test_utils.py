@@ -123,3 +123,7 @@ def test_iter_buckets() -> None:
     assert calls['two'] == 4
     assert calls['three'] == 2
     assert calls['four'] == 0
+
+
+def test_deep_chain_map():
+    pass

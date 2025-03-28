@@ -20,7 +20,7 @@
 				<div class="post-title">{{ post.title }}</div>
 				<div class="word-count">Word count: {{ post.word_count }}</div>
 				<div class="excerpt">
-					{%- filter indent(width='\t\t\t\t\t') %}
+					{% filter indent(width='\t\t\t\t\t') -%}
 					{{ post.excerpt }}
 					{%- endfilter %}
 				</div>

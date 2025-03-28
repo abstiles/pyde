@@ -1,13 +1,11 @@
 import inspect
 from functools import wraps
-from typing import Any, Callable, Sequence, NewType, TypeVar, cast, Protocol
-from typing import Generic
+from typing import Any, Callable, Generic, Protocol, Sequence, TypeVar, cast
 
 import pytest
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
-F = TypeVar('F', bound=Callable[..., T])
 
 class Wrapped(Protocol,Generic[T_co]):
     def __call__(self, *args: Any, **kwargs: Any) -> T_co: ...

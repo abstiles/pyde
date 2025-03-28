@@ -30,7 +30,8 @@ class TransformerType(Protocol):
     @property
     def metadata(self) -> dict[str, Any]: ...
 
-    def set_meta(self, meta: dict[str, Any]) -> Self: ...
+    @metadata.setter
+    def metadata(self, meta: dict[str, Any]) -> None: ...
 
     def transform(self, data: AnyStr) -> str | bytes: ...
 
@@ -139,7 +140,10 @@ class Transformer(TransformerType):
         @property
         def metadata(self) -> dict[str, Any]:
             return {}
-        def set_meta(self, meta: dict[str, Any]) -> Self:
+        @metadata.setter
+        def metadata(self, meta: dict[str, Any]) -> None:
+            _ = meta
+        def _set_meta(self, meta: dict[str, Any]) -> Self:
             _ = meta
             return self
         def pipe(self, **meta: Any) -> Transformer:
@@ -161,7 +165,8 @@ class Transformer(TransformerType):
 
 
 class BaseTransformer(Transformer):
-    __slots__ = ()
+    __slots__ = ('_preprocessed',)
+    _preprocessed: Path | None
 
     def __init__(
         self,
@@ -177,6 +182,7 @@ class BaseTransformer(Transformer):
         _ = parse_frontmatter, permalink, template, metaprocessor
         self._source = source
         self._meta = meta
+        self._preprocessed = None
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}({str(self.source)!r})'
@@ -195,8 +201,13 @@ class BaseTransformer(Transformer):
     def metadata(self) -> dict[str, Any]:
         return self._meta
 
-    def set_meta(self, meta: dict[str, Any]) -> Self:
-        self._meta = merge_dicts(self._meta, meta)
+    @metadata.setter
+    def metadata(self, meta: dict[str, Any]) -> None:
+        self._set_meta(meta)
+
+    def _set_meta(self, meta: dict[str, Any]) -> Self:
+        meta.update(merge_dicts(self._meta, meta))
+        self._meta = meta
         return self
 
     def pipe(self, **meta: Any) -> Transformer:
@@ -206,17 +217,22 @@ class BaseTransformer(Transformer):
         )
 
     def preprocess(self, src_root: Path) -> Self:
-        _ = src_root
+        self._preprocessed = src_root
         return self
 
 
 class PipelineTransformer(BaseTransformer):
     _pipeline: Sequence[Transformer]
-    _preprocessed: Path | None
 
     @property
     def outputs(self) -> Path:
         return self._pipeline[-1].outputs
+
+    def _set_meta(self, meta: dict[str, Any]) -> Self:
+        super()._set_meta(meta)
+        for pipe in self._pipeline:
+            pipe.metadata = self.metadata
+        return self
 
     def preprocess(self, src_root: Path) -> Self:
         if self._preprocessed == src_root:
@@ -224,12 +240,10 @@ class PipelineTransformer(BaseTransformer):
         metadata: dict[str, Any] = self.metadata
         input = self.source
         for pipe in self._pipeline:
-            pipe.set_meta(metadata)
+            pipe.metadata = metadata
             pipe._source = input
             pipe.preprocess(src_root)
             input = pipe.outputs
-            metadata = merge_dicts(metadata, pipe.metadata)
-        self._meta = metadata
         self._preprocessed = src_root
         return self
 
@@ -237,9 +251,8 @@ class PipelineTransformer(BaseTransformer):
         current_data: str | bytes = data
         metadata: dict[str, Any] = self.metadata
         for pipe in self._pipeline:
-            pipe.set_meta(metadata)
+            pipe.metadata = metadata
             current_data = pipe.transform(cast(AnyStr, current_data))
-            metadata = pipe.metadata
         return current_data
 
     def __repr__(self) -> str:
@@ -289,9 +302,6 @@ class PipelineTransformer(BaseTransformer):
         next = cast(PipelineTransformer,
             Transformer(self.outputs, permalink=self._permalink, **meta)
         )
-        if (src_path := self._preprocessed) is not None:
-            next[0].set_meta(self.metadata)
-            next[1:].set_meta(self.metadata).preprocess(src_path)
         # Before joining, split off the CopyTransformer from the end of this
         # pipeline.
         current_metatf, current_pipeline, current_copytf = self._partitioned()
@@ -319,7 +329,11 @@ class PipelineTransformer(BaseTransformer):
                 *next_pipeline,
                 *current_copytf.or_maybe(next_copytf),
             ]
-        return PipelineTransformer(self.source, pipeline=head + tail).set_meta(self._meta)
+        updated = PipelineTransformer(self.source, pipeline=head + tail)
+        updated.metadata = self.metadata
+        if (src_path := self._preprocessed) is not None:
+            updated.preprocess(src_path)
+        return updated
 
     @classmethod
     def build(
@@ -331,11 +345,14 @@ class PipelineTransformer(BaseTransformer):
     ) -> PipelineTransformer:
         tfs: list[Transformer] = []
         input = source
+        metadata: dict[str, Any] = {}
         for transformer_type in transformers:
             transformer = transformer_type(input, **meta)
             tfs.append(transformer)
+            metadata.update(merge_dicts(metadata, transformer.metadata))
         new_pipeline = cls(source, pipeline=tfs)
         new_pipeline._pipeline = tfs
+        new_pipeline.metadata = metadata
         return new_pipeline
 
 
@@ -353,15 +370,21 @@ class CopyTransformer(BaseTransformer):
         super().__init__(source, **meta)
         self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
         self._collection_root = collection_root
+        if collection_root not in self._source.parents:
+            # This state indicates the path has already been generated,
+            # an outcome that can happen if two CopyTransformers are
+            # present in the same pipeline.
+            self._collection_root = Path('.')
 
     def _generate_path_info(self) -> Self:
-        self._meta['file'] = self._get_path(as_filename=True)
-        self._meta.setdefault('page', {})['path'] = Path('/') / self._get_path()
+        self.metadata['file'] = self._get_path(as_filename=True)
+        self.metadata['path'] = Path('/') / self._get_path()
         return self
 
     def preprocess(self, src_root: Path) -> Self:
-        super().preprocess(src_root)
-        self._generate_path_info()
+        if self._preprocessed is not None:
+            super().preprocess(src_root)
+            self._generate_path_info()
         return self
 
     def __repr__(self) -> str:
@@ -429,7 +452,7 @@ class MarkdownTransformer(TextTransformer, pattern='*.md'):
 
     def transform_text(self, text: str) -> str:
         html = markdownify(text)
-        page = self._meta.setdefault('page', {})
+        page = self.metadata
         try:
             page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
             page['word_count'] = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
@@ -443,19 +466,17 @@ class TemplateApplyTransformer(TextTransformer):
     """Apply a Jinja2 Template to a text file"""
 
     def __init__(self, source: Path, /, *, template: Template, **meta: Any):
-        super().__init__(source)
+        super().__init__(source, **meta)
         self._template = template
-        del meta['permalink']
-        self._meta = meta
 
     def __repr__(self) -> str:
         return (
             f'{self.__class__.__name__}('
-            f'{str(self.source)!r}, {self._template!r}, **{self._meta})'
+            f'{str(self.source)!r}, {self._template!r}, **{self.metadata})'
         )
 
     def transform_text(self, text: str) -> str:
-        results = self._template.render(content=text, **self._meta)
+        results = self._template.render(content=text, page=self.metadata)
         return results
 
 
@@ -477,7 +498,6 @@ class MetaTransformer(TextTransformer):
         **meta: Any,
     ):
         super().__init__(source, **meta)
-        self._meta: dict[str, Any] = {}
 
     def preprocess(self, src_root: Path) -> Self:
         self.transform_from_file(src_root)
@@ -486,8 +506,7 @@ class MetaTransformer(TextTransformer):
     def transform_text(self, text: str) -> str:
         frontmatter, content = self.split_frontmatter(text)
         metadata = parse_yaml_dict(frontmatter) if frontmatter else {}
-        self._meta.update(metadata)
-        self._meta.setdefault('page', {}).update(metadata)
+        self.metadata.update(merge_dicts(self.metadata, metadata))
         return content
 
     @staticmethod
@@ -515,4 +534,4 @@ class MetaProcessorTransformer(TextTransformer):
         self._processor = metaprocessor
 
     def transform_text(self, text: str) -> str:
-        return self._processor(text, **self._meta)
+        return self._processor(text, **self.metadata)
