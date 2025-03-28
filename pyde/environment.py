@@ -38,12 +38,13 @@ class Environment:
     def __init__(
         self,
         config: Config, /,
-        exec_dir: Path=Path('.')
     ):
         pyde = Data(
             environment='development' if config.drafts else 'production',
             **dataclasses.asdict(config)
         )
+
+        exec_dir = config.config_file.parent if config.config_file else Path('.')
         self.config = config
         self.exec_dir = exec_dir
         self.includes_dir = exec_dir / self.config.includes_dir
@@ -55,7 +56,6 @@ class Environment:
         self.root = exec_dir / self.config.root
         self._site = SiteFileManager(self.config.url)
         self.template_manager = TemplateManager(
-            self.config.url,
             exec_dir / self.includes_dir,
             exec_dir / self.layouts_dir,
             globals={
@@ -118,7 +118,8 @@ class Environment:
     def transforms(self) -> Iterable[Transformer]:
         base: dict[str, Any] = {
             "permalink": self.config.permalink, "layout": "default",
-            "metaprocessor": self.render_template,
+            "metaprocessor": self.render_template, "site_url": self.config.url,
+            "links": [],
         }
         for source in self.source_files():
             if not self.should_transform(source):

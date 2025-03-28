@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 from typing import cast
 
+from pyde.environment import Environment as Pyde
+
 from .config import Config
-from .build import build_site
 
 
 def main() -> int:
@@ -42,7 +43,7 @@ def build(opts: argparse.Namespace) -> int:
         config.drafts = True
     if opts.destination:
         config.output_dir = cast(Path, opts.destination)
-    build_site(config)
+    Pyde(config).build()
     return 0
 
 

@@ -32,6 +32,7 @@ def get_config(**kwargs: Any) -> Config:
     return dict_to_dataclass(
         Config,
         {
+            'config_file': TEST_DATA_DIR / IN_DIR / '_config.yml',
             'url': 'https://www.example.com',
             'output_dir': OUT_DIR,
             'permalink': '/:path/:basename',
@@ -49,7 +50,7 @@ def get_config(**kwargs: Any) -> Config:
 
 
 def get_env(**kwargs: Any) -> Environment:
-    return Environment(get_config(**kwargs), exec_dir=TEST_DATA_DIR / IN_DIR)
+    return Environment(get_config(**kwargs))
 
 
 LAYOUT_FILES = {

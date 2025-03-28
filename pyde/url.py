@@ -66,7 +66,7 @@ class UrlPath:
             case UrlPath(): return url.url_tuple
             case PathLike(): return ParsedUrl.parse(url, quote=quote)
             case str(): return ParsedUrl.parse(url, quote=quote)
-            case _: raise ValueError(f'Invalid type for url: {type(url)}')
+            case _: raise ValueError(f'Invalid type for url {url!r}')
 
     def __init__(self, url: PathType | ParsedUrl='', *, quote: bool=True):
         self.url_tuple = self._parse_url(url, quote)

@@ -90,11 +90,16 @@ def parse_yaml_dict(yaml_str: str) -> Mapping[str, YamlType | AutoDate]:
     yaml_dict = yaml.safe_load(yaml_str)
     if not isinstance(yaml_dict, Mapping):
         return {}
-    return _transform_dates(cast(dict[str, YamlType], yaml_dict))
+    return _transform_types(cast(dict[str, YamlType], yaml_dict))
 
 
-def _transform_dates(data: dict[str, YamlType]) -> dict[str, YamlType | AutoDate]:
-    return {
-        key: AutoDate(val.isoformat()) if isinstance(val, (datetime, date))
-        else val for (key, val) in data.items()
-    }
+def _transform_types(data: dict[str, YamlType]) -> dict[str, YamlType | AutoDate]:
+    dates_fixed = (
+        (key, (AutoDate(val.isoformat()) if isinstance(val, (datetime, date)) else val))
+        for key, val in data.items()
+    )
+    nones_iterable = (
+        (key, ([] if val is None else val)) for key, val in dates_fixed
+    )
+    result = nones_iterable
+    return dict(result)

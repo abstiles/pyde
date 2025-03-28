@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any, AnyStr, ClassVar, Protocol, Self, Type, c
 from jinja2 import Template
 from markupsafe import Markup
 
+from pyde.data import Data
+from pyde.url import UrlPath
+
 from .markdown import markdownify
 from .utils import Maybe, ilen, merge_dicts
 from .yaml import parse_yaml_dict
@@ -378,7 +381,9 @@ class CopyTransformer(BaseTransformer):
 
     def _generate_path_info(self) -> Self:
         self.metadata['file'] = self._get_path(as_filename=True)
-        self.metadata['path'] = Path('/') / self._get_path()
+        self.metadata['path'] = UrlPath('/') / self._get_path()
+        self.metadata['dir'] = str(self.metadata['path'].parent)
+        self.metadata['url'] = self.metadata['site_url'] / self.metadata['path']
         return self
 
     def preprocess(self, src_root: Path) -> Self:
@@ -476,7 +481,11 @@ class TemplateApplyTransformer(TextTransformer):
         )
 
     def transform_text(self, text: str) -> str:
-        results = self._template.render(content=text, page=self.metadata)
+        page_url = self.metadata['site_url'] / self.metadata['path']
+        results = self._template.render(
+            content=text,
+            page=Data(self.metadata | dict(content=text)),
+        )
         return results
 
 

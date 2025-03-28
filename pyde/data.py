@@ -81,7 +81,7 @@ class Data(Mapping[str, Any]):
         del self[key]
 
     def __repr__(self) -> str:
-        return repr(self._d)
+        return f'{self.__class__.__name__}({self._d!r})'
 
 
 PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)

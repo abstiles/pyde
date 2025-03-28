@@ -103,6 +103,8 @@ class Config:
     drafts_dir: Path = Path('_drafts')
     posts: CollectionSpec = CollectionSpec('posts')
     tags: TagSpec = TagSpec()
+    # TODO: Generate pages!
+    paginate_path: str = '/page:num'
 
     def __post_init__(self) -> None:
         self.defaults.extend([

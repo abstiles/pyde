@@ -39,7 +39,7 @@ T = TypeVar('T')
 
 class TemplateManager:
     def __init__(
-        self, url: UrlPath, includes_dir: Path, templates_dir: Path,
+        self, includes_dir: Path, templates_dir: Path,
         globals: Mapping[str, Any]={},
     ):
         self.env = Environment(
@@ -61,6 +61,7 @@ class TemplateManager:
         self.env.filters['slugify'] = slugify
         self.env.filters['append'] = append
         self.env.filters['date'] = date
+        self.env.filters['where'] = where
         self.env.filters['where_exp'] = where_exp
         self.env.filters['sort_natural'] = sort_natural
         self.env.filters['number_of_words'] = number_of_words
@@ -529,6 +530,11 @@ ARG_PATTERN = f'{NAME_PATTERN}|{STRING_PATTERN}'
 
 contains_re = re.compile(f'({ARG_PATTERN}) contains ({ARG_PATTERN})')
 
+def where(iterable: Iterable[T], key: str, compare: str) -> Iterable[T]:
+    iterable = cast(Mapping[Any, Any], iterable)
+    return (item for item in iterable if str(item[key]) == str(compare))
+
+
 @pass_context
 def where_exp(
     context: Context, iterable: Iterable[T], var: str, expression: str,
@@ -658,7 +664,7 @@ def absolute_url(context: Context, path: str) -> UrlPath:
     url = context.resolve('page').url
     if not url:
         print(f'Unable to resolve url in context: {context.name}', file=sys.stderr)
-        return UrlPath(path)
+        return context.environment.undefined('url')
     page_url = UrlPath(str(url))
     try:
         path_url = page_url >> path
