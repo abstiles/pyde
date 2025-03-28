@@ -17,6 +17,7 @@ ipython = "*"
 pytest = "*"
 types-markdown = "*"
 pyright = "*"
+debugpy = "*"
 
 [requires]
 python_version = "3.11"
