@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyde.url import UrlPath
+from pyde.path import UrlPath
 from ..test import parametrize, Fixture
 
 

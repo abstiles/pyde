@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Iterable, Literal
 
 import yaml
 
-from .url import UrlPath
+from .path import UrlPath, FilePath
 from .utils import dict_to_dataclass, flatmap
 
 PathType = str | PathLike[str]
@@ -44,7 +44,7 @@ class ScopeSpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, 'path', Path(self.path))
 
-    def matches(self, path: Path) -> bool:
+    def matches(self, path: FilePath) -> bool:
         if self is ScopeSpec.ALL:
             return True
         return self.path in path.parents
@@ -64,9 +64,15 @@ class DefaultSpec:
 
 @dataclass(frozen=True)
 class TagSpec:
-    enabled: bool = True
+    template: str = ''
     path: Path = Path('tag')
-    template: str = 'default'
+    minimum: int | bool = 2
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.template)
+
+
 
 @dataclass(frozen=True)
 class CollectionSpec:
@@ -104,7 +110,7 @@ class Config:
     posts: CollectionSpec = CollectionSpec('posts')
     tags: TagSpec = TagSpec()
     # TODO: Generate pages!
-    paginate_path: str = '/page:num'
+    paginate_path: str = '/:collection/page.:num'
 
     def __post_init__(self) -> None:
         self.defaults.extend([
@@ -114,7 +120,9 @@ class Config:
                 permalink=self.posts.permalink
             ),
             DefaultSpec.make(self.drafts_dir, type='post', draft=True),
-            DefaultSpec.make(self.tags.path, type='meta'),
+            DefaultSpec.make(
+                self.tags.path, type='meta', layout=self.tags.template,
+            ),
         ])
 
     def iter_files(self) -> Iterable[SourceFile]:

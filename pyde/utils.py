@@ -1,6 +1,7 @@
 """
 Common utility functions
 """
+import re
 from collections import deque
 from collections.abc import Generator, Mapping, Reversible, Sequence
 from dataclasses import fields, is_dataclass
@@ -23,6 +24,7 @@ from typing import (
 
 from typing_extensions import ParamSpec
 
+
 T = TypeVar('T')
 U = TypeVar('U')
 V = TypeVar('V')
@@ -31,6 +33,7 @@ U_co = TypeVar('U_co', covariant=True)
 V_co = TypeVar('V_co', covariant=True)
 T_contra = TypeVar('T_contra', contravariant=True)
 P = ParamSpec('P')
+F = TypeVar('F', bound=Callable[..., Any])
 
 
 def flatmap(f: Callable[[T], Iterable[U]], it: Iterable[T]) -> Iterable[U]:
@@ -422,18 +425,42 @@ def iter_buckets(
                 break
 
 
-class GeneratorCoroutine(Protocol, Generic[P, T_contra]):
-    def __call__(
-        self, *args: P.args, **kwargs: P.kwargs
-    ) -> Generator[Any, T_contra, Any]: ...
+class CaseInsensitiveStr(str):
+    def __hash__(self) -> int:
+        return hash(super().lower())
+
+    def __eq__(self, other: object, /) -> bool:
+        try:
+            other = cast(str, other)
+            return super().lower() == other.lower()
+        except (AttributeError, TypeError):
+            return False
 
 
-def prime_coroutine(
-    func: GeneratorCoroutine[P, T_contra]
-) -> GeneratorCoroutine[P, T_contra]:
-    @wraps(func)
-    def wrapper(*args: P.args, **kwds: P.kwargs) -> Generator[Any, T_contra, Any]:
-        generator = func(*args, **kwds)
-        next(generator)
-        return generator
-    return wrapper
+def slugify(text: str) -> str:
+    """Replace bad characters for use in a path"""
+    return re.sub(
+        '[^a-z0-9-]+', '-',
+        text.lower().replace("'", ""),
+    ).strip(' -')
+
+
+class ReturningGenerator(Generic[T, U]):
+    """A helper for iterating a generator and getting its return value"""
+    def __init__(self, generator: Generator[T, Any, U]):
+        self._generator = generator
+        self._iterated = False
+        self._value = cast(U, None)
+
+    def __iter__(self) -> Iterator[T]:
+        if not self._iterated:
+            self._value = yield from self._generator
+            self._iterated = True
+        else:
+            yield from iter(())
+
+    @property
+    def value(self) -> U:
+        if not self._iterated:
+            consumeall(self._generator)
+        return self._value

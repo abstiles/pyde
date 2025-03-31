@@ -1,5 +1,9 @@
 ---
 title: Some Post
+tags:
+  - markdown
+  - test
+  - tag with spaces
 ---
 This is a post wherein markdown is demonstrated. Watch how I
 choose to *emphasize* some text and **strengthen** other text.

@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import collections.abc
-from collections.abc import Sequence, Mapping, Iterable, Iterator
+import urllib.parse
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import chain
 from os import PathLike
 from pathlib import PurePosixPath
-from typing import Any, Literal, NamedTuple, NewType, TypeAlias, Union, overload
-import urllib.parse
-from urllib.parse import urlparse, urlencode, parse_qs
+from typing import Any, Literal, NamedTuple, NewType, TypeAlias, Union, cast, overload
+from urllib.parse import parse_qs, urlencode, urlparse
 
-from .utils import dictfilter
+from ..utils import dictfilter
+from .filepath import FilePath, PydePath
 
-
-PathType: TypeAlias = Union[str, PathLike[str], 'UrlPath']
+PathType: TypeAlias = Union[PydePath, PathLike[str], 'UrlPath']
 UrlStr = NewType('UrlStr', str)
 UrlQuoted = UrlStr | Literal['', '/']
 QueryStr = NewType('QueryStr', str)
@@ -49,7 +49,7 @@ class ParsedUrl(NamedTuple):
         return UrlStr(str(self))
 
 
-class UrlPath:
+class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
     """Represents a URL"""
 
     url_tuple: ParsedUrl
@@ -65,8 +65,7 @@ class UrlPath:
             case ParsedUrl(): return url
             case UrlPath(): return url.url_tuple
             case PathLike(): return ParsedUrl.parse(url, quote=quote)
-            case str(): return ParsedUrl.parse(url, quote=quote)
-            case _: raise ValueError(f'Invalid type for url {url!r}')
+            case _: return ParsedUrl.parse(str(url), quote=quote)
 
     def __init__(self, url: PathType | ParsedUrl='', *, quote: bool=True):
         self.url_tuple = self._parse_url(url, quote)
@@ -142,8 +141,18 @@ class UrlPath:
         return self._path.stem
 
     @property
+    def suffix(self) -> str:
+        return self._path.suffix
+
+    @property
     def path(self) -> UrlQuoted:
         return self.url_tuple.path or '/'
+
+    @property
+    def deindexed(self) -> UrlPath:
+        if self.stem == 'index':
+            return self.parent
+        return self
 
     @property
     def dir(self) -> UrlPath:
@@ -153,6 +162,14 @@ class UrlPath:
     def parent(self) -> UrlPath:
         parent_path = str(self._path.parent)
         return self._updated(path=UrlStr(parent_path)).as_dir()
+
+    @property
+    def parents(self) -> Sequence[UrlPath]:
+        parents = str(self._path.parent)
+        return [
+            self._updated(path=UrlStr(parent)).as_dir()
+            for parent in parents
+        ]
 
     def __rtruediv__(self, parent: PathType) -> UrlPath:
         return UrlPath(parent) / self
@@ -168,12 +185,15 @@ class UrlPath:
             url_path = new_path
         else:
             url_path = UrlPath(str(new_path))
-        return self.navigate(url_path.as_absolute())
+        return self.navigate(url_path.absolute())
+
+    def match(self, path_pattern: str) -> bool:
+        return self._path.match(path_pattern)
 
     def child(self, key: PathType) -> UrlPath:
         return self.as_dir().navigate(key)
 
-    def as_absolute(self, from_path: PathType='/') -> UrlPath:
+    def absolute(self, from_path: PathType='/') -> UrlPath:
         root = urlquote(from_path)
         path = urljoin(root, self.path)
         if path == self.path:
@@ -213,6 +233,9 @@ class UrlPath:
         new_path = urljoin(self.path, url_path.path)
         return self._updated(path=new_path, query='', fragment='')
 
+    def with_suffix(self, suffix: str) -> UrlPath:
+        return self._updated(path=UrlStr(str(self._path.with_suffix(suffix))))
+
     def with_query(self, query: str) -> UrlPath:
         return self._updated(query=queryquote(query))
 
@@ -221,11 +244,14 @@ class UrlPath:
         return urllib.parse.unquote(path_part)
 
     def __and__(self, param: str | tuple[str, Any] | Mapping[str, Any]) -> UrlPath:
+        def split_assign(assign: str) -> tuple[str, str]:
+            name, value = assign.partition('=')[::2]
+            return name, value
         if isinstance(param, Mapping):
             return self.query.with_added(param)
         if isinstance(param, str):
             params = param.split('&')
-            pairs = (param.partition('=')[::2] for param in params)
+            pairs = (split_assign(param) for param in params)
             return self.query.with_added(pairs)
         if len(param) > 1 and isinstance(param[0], str):
             return self.query.with_added([param])
@@ -234,7 +260,13 @@ class UrlPath:
     def __xor__(self, param: str) -> UrlPath:
         return self.query.with_removed(param)
 
-    def relative_to(self, path: PathType) -> UrlPath:
+    def relative_to(self, *other: PydePath) -> UrlPath:
+        try:
+            path = UrlPath(other[0])
+        except KeyError:
+            raise TypeError('need at least one argument') from None
+        for segment in other[1:]:
+            path = path / segment
         path_dir = UrlPath(path).dir
         new_path = str(self._path.relative_to(path_dir.path))
         return self._updated(path=UrlStr(new_path))
@@ -263,6 +295,7 @@ class QueryMap(Mapping[str, Sequence[str]]):
     @staticmethod
     def iteritems(data: Mapping[str, Any] | Iterable[Pair]) -> Iterable[Pair]:
         if isinstance(data, Mapping):
+            data = cast(Mapping[str, Any], data)
             return ((k, data[k]) for k in data)
         return ((key, val) for (key, val, *_) in data)
 

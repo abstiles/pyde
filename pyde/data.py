@@ -15,7 +15,7 @@ from markupsafe import Markup
 
 from .config import Config, SourceFile
 from .markdown import markdownify
-from .url import UrlPath
+from .path import UrlPath
 from .utils import ilen
 
 

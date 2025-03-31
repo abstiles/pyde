@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import dataclasses
 import re
 import shutil
+from collections.abc import Generator, Mapping, Sequence
 from functools import partial
 from glob import glob
 from itertools import islice
@@ -22,13 +22,14 @@ from typing import (
     overload,
 )
 
-from pyde.url import UrlPath
-
 from .config import Config
 from .data import Data
+from .path import UrlPath
+from .path.filepath import FilePath, LocalPath, ReadablePath, WriteablePath
+from .path.virtual import VirtualPath
 from .templates import TemplateManager
 from .transformer import CopyTransformer, Transformer
-from .utils import flatmap, seq_pivot
+from .utils import CaseInsensitiveStr, ReturningGenerator, flatmap, seq_pivot, slugify
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -44,7 +45,7 @@ class Environment:
             **dataclasses.asdict(config)
         )
 
-        exec_dir = config.config_file.parent if config.config_file else Path('.')
+        exec_dir = LocalPath(config.config_file.parent if config.config_file else '.')
         self.config = config
         self.exec_dir = exec_dir
         self.includes_dir = exec_dir / self.config.includes_dir
@@ -67,7 +68,8 @@ class Environment:
 
     @property
     def site(self) -> SiteFileManager:
-        return self._site.load(self.transforms())
+        transform_processor = FileProcessor(self.transforms())
+        return self._site.load(transform_processor)
 
     def build(self) -> None:
         self.output_dir.mkdir(exist_ok=True)
@@ -88,7 +90,7 @@ class Environment:
             else:
                 file.unlink(missing_ok=True)
 
-    def source_files(self) -> Iterable[Path]:
+    def source_files(self) -> Iterable[LocalPath]:
         globber = partial(iterglob, root=self.root)
         exclude_patterns = set(filter(_not_none, [
             self.config.output_dir,
@@ -100,12 +102,12 @@ class Environment:
         if not self.config.drafts:
             exclude_patterns.add(self.config.drafts_dir)
         excluded = set(flatmap(globber, exclude_patterns))
-        excluded_dirs = set(filter(Path.is_dir, excluded))
+        excluded_dirs = set(filter(LocalPath.is_dir, excluded))
         included = set(flatmap(globber, self.config.include))
         files = set(flatmap(globber, set(['**'])))
         yield from {
             file.relative_to(self.root)
-            for file in filter(Path.is_file, files - excluded)
+            for file in filter(LocalPath.is_file, files - excluded)
             if file in included or not excluded_dirs.intersection(file.parents)
         }
 
@@ -115,31 +117,56 @@ class Environment:
         template = source.decode('utf') if isinstance(source, bytes) else source
         return self.template_manager.render(template, metadata)
 
-    def transforms(self) -> Iterable[Transformer]:
+    def transforms(self) -> Generator[SiteFile, None, dict[Tag, list[SiteFile]]]:
         base: dict[str, Any] = {
             "permalink": self.config.permalink, "layout": "default",
             "metaprocessor": self.render_template, "site_url": self.config.url,
             "links": [],
         }
-        for source in self.source_files():
+        tags: dict[Tag, list[SiteFile]] = {}
+        source: ReadablePath
+        for source in map(LocalPath, self.source_files()):
             if not self.should_transform(source):
-                yield CopyTransformer(source, file=source)
+                yield SiteFile(CopyTransformer(source, file=source), 'raw')
                 continue
             values = self.get_default_values(source)
             tf = Transformer(source, **(base | values)).preprocess(self.root)
             layout = tf.metadata.get('layout', values['layout'])
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
-            yield tf.pipe(template=template)
+            site_file = SiteFile.classify(tf.pipe(template=template))
+            page_tags = tf.metadata.get('tags') or []
+            for tag in page_tags:
+                tags.setdefault(tag, []).append(site_file)
+            yield site_file
 
-    def get_default_values(self, source: Path) -> dict[str, Any]:
+        if not self.config.tags.enabled:
+            return {}
+
+        for tag, pages in tags.items():
+            if len(pages) >= self.config.tags.minimum:
+                source = VirtualPath(self.config.tags.path / f'{slugify(tag)}.html')
+                values = self.get_default_values(source)
+                template_name = f'{self.config.tags.template}.html'
+                template = self.template_manager.get_template(template_name)
+                tf = Transformer(
+                    source, **{
+                        **base, **values, 'title': tag.title(), 'tag': tag,
+                        'template': template,
+                    }
+                ).preprocess(self.root)
+                yield SiteFile.meta(tf)
+
+        return tags
+
+    def get_default_values(self, source: FilePath) -> dict[str, Any]:
         values = {}
         for default in self.config.defaults:
             if default.scope.matches(source):
                 values.update(default.values)
         return values
 
-    def should_transform(self, source: Path) -> bool:
+    def should_transform(self, source: LocalPath) -> bool:
         """Return true if this file should be transformed in some way."""
         with (self.root / source).open('rb') as f:
             header = f.read(5)
@@ -147,46 +174,85 @@ class Environment:
                 return True
         return False
 
-    def output_files(self) -> Iterable[Path]:
+    def output_files(self) -> Iterable[FilePath]:
         for transform in self.transforms():
             yield transform.outputs
 
-    def _tree(self, dir: Path) -> Iterable[Path]:
+    def _tree(self, dir: LocalPath) -> Iterable[LocalPath]:
         return (
             f.relative_to(self.root.absolute())
             for f in dir.absolute().rglob('*')
             if not f.name.startswith('.')
         )
 
-    def layout_files(self) -> Iterable[Path]:
+    def layout_files(self) -> Iterable[LocalPath]:
         return self._tree(self.layouts_dir)
 
-    def include_files(self) -> Iterable[Path]:
+    def include_files(self) -> Iterable[LocalPath]:
         return self._tree(self.includes_dir)
 
-    def draft_files(self) -> Iterable[Path]:
+    def draft_files(self) -> Iterable[LocalPath]:
         return self._tree(self.drafts_dir)
 
 
 SiteFileType: TypeAlias = Literal['post', 'page', 'raw', 'meta']
 
+
+class Tag(CaseInsensitiveStr):
+    pass
+
+
 class SiteFile:
     def __init__(self, tf: Transformer, type: SiteFileType):
         self.tf, self.type = tf, type
-        self.metadata = Data(tf.metadata)
 
-    def render(self, input_dir: Path, output_dir: Path) -> Path:
+    @classmethod
+    def raw(cls, tf: Transformer) -> Self:
+        return cls(tf, 'raw')
+
+    @classmethod
+    def page(cls, tf: Transformer) -> Self:
+        return cls(tf, 'page')
+
+    @classmethod
+    def post(cls, tf: Transformer) -> Self:
+        return cls(tf, 'post')
+
+    @classmethod
+    def meta(cls, tf: Transformer) -> Self:
+        return cls(tf, 'meta')
+
+    @classmethod
+    def classify(cls, tf: Transformer) -> Self:
+        if isinstance(tf, CopyTransformer):
+            return cls(tf, 'raw')
+        if type := tf.metadata.get('type'):
+            return cls(tf, type)
+        if tf.source.suffix in ('.md', '.html'):
+            return cls(tf, 'page')
+        return cls(tf, 'raw')
+
+    def render(
+        self, input_dir: ReadablePath, output_dir: WriteablePath
+    ) -> WriteablePath:
         result = self.tf.transform_file(input_dir, output_dir)
-        self.metadata = Data(self.tf.metadata)
         return result
 
     @property
-    def source(self) -> Path:
+    def source(self) -> ReadablePath:
         return self.tf.source
 
     @property
-    def outputs(self) -> Path:
+    def outputs(self) -> WriteablePath:
         return self.tf.outputs
+
+    @property
+    def metadata(self) -> Data:
+        return Data(self.tf.metadata)
+
+    @property
+    def tags(self) -> Iterable[Tag]:
+        return map(Tag, self.metadata.get('tags', ()))
 
 
 class SiteFileManager(Iterable[SiteFile]):
@@ -194,6 +260,7 @@ class SiteFileManager(Iterable[SiteFile]):
         self._files: Mapping[SiteFileType, Iterable[SiteFile]] = {}
         self._loaded = False
         self.url = url
+        self._tags: TagMap = {}
 
     def _page_data(self, type: SiteFileType) -> Iterable[Mapping[str, Any]]:
         return [
@@ -216,6 +283,13 @@ class SiteFileManager(Iterable[SiteFile]):
     def meta(self) -> Iterable[Mapping[str, Any]]:
         return self._page_data('meta')
 
+    @property
+    def tags(self) -> Mapping[str, list[Data]]:
+        return {
+            tag: [post.metadata for post in posts]
+            for tag, posts in self._tags.items()
+        }
+
     @classmethod
     def site_file(cls, tf: Transformer) -> SiteFile:
         if isinstance(tf, CopyTransformer):
@@ -226,19 +300,43 @@ class SiteFileManager(Iterable[SiteFile]):
             return SiteFile(tf, 'page')
         return SiteFile(tf, 'raw')
 
-    def load(self, transformers: Iterable[Transformer]) -> Self:
+    def load(self, site_files: FileProcessor) -> Self:
         if self._loaded:
             return self
-        site_files = map(self.site_file, transformers)
         self._files = seq_pivot(site_files, attr='type')
+        self._tags = site_files.tag_map
         self._loaded = True
         return self
 
     def __iter__(self) -> Iterator[SiteFile]:
-        type_ordering: Iterable[SiteFileType] = (
-            'post', 'page', 'meta', 'raw')
+        type_ordering: Iterable[SiteFileType] = ('post', 'page', 'raw', 'meta')
         for file_type in type_ordering:
             yield from self._files.get(file_type, ())
+
+
+TagMap: TypeAlias = Mapping[Tag, Sequence[SiteFile]]
+
+class FileProcessor(Iterable[SiteFile]):
+    def __init__(self, tf_generator: Generator[SiteFile, None, TagMap]):
+        self._generator = ReturningGenerator(tf_generator)
+        self._files: list[SiteFile] | None = None
+
+    def _process(self) -> list[SiteFile]:
+        if self._files is None:
+            self._files = list(self._generator)
+        return self._files
+
+    def __iter__(self) -> Iterator[SiteFile]:
+        return iter(self.site_files)
+
+    @property
+    def site_files(self) -> Iterable[SiteFile]:
+        return self._process()
+
+    @property
+    def tag_map(self) -> TagMap:
+        self._process()
+        return self._generator.value
 
 
 def _not_none(item: T | None) -> TypeGuard[T]:
@@ -249,26 +347,32 @@ def _not_dotfile(item: Path) -> bool:
     return not item.name.startswith('.')
 
 
-def iterglob(pattern: str | PathLike[str], root: Path=Path('.')) -> Iterable[Path]:
+def iterglob(
+    pattern: str | PathLike[str], root: LocalPath=LocalPath('.'),
+) -> Iterable[LocalPath]:
     for path in glob(str(pattern), root_dir=root, recursive=True):
         yield root / path
 
 
+F = TypeVar('F', bound=FilePath)
+
 @overload
-def file_and_parents(*, upto: Path) -> Callable[[Path], Iterable[Path]]: ...
+def file_and_parents(*, upto: F) -> Callable[[FilePath], Iterable[F]]: ...
 @overload
-def file_and_parents(path: Path, /, *, upto: Path=Path('/')) -> Iterable[Path]: ...
+def file_and_parents(path: FilePath, /) -> Iterable[LocalPath]: ...
+@overload
+def file_and_parents(path: FilePath, /, *, upto: F) -> Iterable[F]: ...
 def file_and_parents(
-    path: Path | None=None, /, *, upto: Path=Path('/')
-) -> Iterable[Path] | Callable[[Path], Iterable[Path]]:
-    def generator(file: Path, /) -> Iterable[Path]:
+    path: FilePath | None=None, /, *, upto: FilePath=LocalPath('/')
+) -> Iterable[FilePath] | Callable[[FilePath], Iterable[FilePath]]:
+    def generator(file: FilePath, /) -> Iterable[FilePath]:
         assert upto is not None
         yield file
-        parents = file.relative_to(upto).parents
+        parents = file.relative_to(str(upto)).parents
         # Use islice(reversed(...))) to skip the last parent, which will be
         # "upto" itself.
         yield from (
-            upto / parent for parent in islice(reversed(parents), 1, None)
+            upto / str(parent) for parent in islice(reversed(parents), 1, None)
         )
     if path is None:
         return generator

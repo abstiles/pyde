@@ -44,6 +44,7 @@ def get_config(**kwargs: Any) -> Config:
                     'values': {'permalink': '/drafts/:title'},
                 },
             ],
+            'tags': 'tag',
             **kwargs,
         }
     )
@@ -57,6 +58,7 @@ LAYOUT_FILES = {
     '_layouts/index.html',
     '_layouts/post.html',
     '_layouts/default.html',
+    '_layouts/tag.html',
 }
 INCLUDE_FILES = {'_includes/header.html'}
 DRAFT_FILES = {'_drafts/unfinished_post.md'}
@@ -64,6 +66,7 @@ SOURCE_FILES = {
     'index.md',
     'js/script.js',
     '_posts/post.md',
+    '_posts/another-post.md',
     'styles/base.css',
 }
 RAW_OUTPUTS = {
@@ -73,13 +76,18 @@ RAW_OUTPUTS = {
 PAGE_OUTPUTS = {
     'index.html',
 }
+META_OUTPUTS = {
+    'tag/test.html',
+    'tag/tag-with-spaces.html',
+}
 DRAFT_OUTPUTS = {
     'drafts/WIP.html',
 }
 POST_OUTPUTS = {
     'posts/post.html',
+    'posts/another-post.html',
 }
-OUTPUT_FILES = RAW_OUTPUTS | PAGE_OUTPUTS | POST_OUTPUTS
+OUTPUT_FILES = RAW_OUTPUTS | PAGE_OUTPUTS | POST_OUTPUTS | META_OUTPUTS
 DRAFT_OUTPUT_FILES = OUTPUT_FILES | DRAFT_OUTPUTS
 
 def test_environment_source_files() -> None:
@@ -132,6 +140,7 @@ def test_build_cleanup() -> None:
     ['raw', RAW_OUTPUTS],
     ['pages', PAGE_OUTPUTS],
     ['posts', POST_OUTPUTS | DRAFT_OUTPUTS],
+    ['meta', META_OUTPUTS],
 )
 def test_site_files(
     type: str, results: set[str]
@@ -140,3 +149,16 @@ def test_site_files(
     assert set(
         str(file['file']) for file in getattr(env.site, type)
     ) == results
+
+@parametrize(
+    ['markdown', {'posts/post.html'}],
+    ['test', {'posts/post.html', 'posts/another-post.html'}],
+    ['tag with spaces', {'posts/post.html', 'posts/another-post.html'}],
+)
+def test_tags(
+    tag: str, posts: set[str]
+) -> None:
+    env = get_env(drafts=True)
+    assert set(
+        str(post['file']) for post in env.site.tags[tag]
+    ) == posts

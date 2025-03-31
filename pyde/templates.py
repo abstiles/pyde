@@ -29,17 +29,17 @@ from jinja2.utils import Namespace
 from .config import Config
 from .data import AutoDate, Data
 from .markdown import markdownify
-from .url import UrlPath
+from .path import AnyRealPath, UrlPath
 from .utils import first as ifirst
 from .utils import last as ilast
-from .utils import prepend
+from .utils import prepend, slugify
 
 T = TypeVar('T')
 
 
 class TemplateManager:
     def __init__(
-        self, includes_dir: Path, templates_dir: Path,
+        self, includes_dir: AnyRealPath, templates_dir: AnyRealPath,
         globals: Mapping[str, Any]={},
     ):
         self.env = Environment(
@@ -137,13 +137,14 @@ class TemplateError(ValueError):
 
 class TemplateLoader(BaseLoader):
     """Main loader for templates"""
-    def __init__(self, templates_dir: Path, includes_dir: Path):
+    def __init__(self, templates_dir: AnyRealPath, includes_dir: AnyRealPath):
         self.templates_dir = templates_dir
         self.includes_dir = includes_dir
 
     def get_source(
         self, environment: Environment, template: str
     ) -> tuple[str, str | None, Callable[[], bool] | None]:
+        path: AnyRealPath
         if template.startswith(str(self.includes_dir)):
             path = Path(template)
             if not path.is_file():
@@ -464,14 +465,6 @@ class Sublexer:
             yield Token(token.lineno + lineno - 1, token.type, token.value)
 
 
-def slugify(text: str) -> str:
-    """Replace bad characters for use in a path"""
-    return re.sub(
-        '[^a-z0-9-]+', '-',
-        text.lower().replace("'", ""),
-    ).strip(' -')
-
-
 def append(base: str | Path, to: str) -> Path | str:
     if isinstance(base, Path):
         return base / str(to)
@@ -672,7 +665,7 @@ def absolute_url(context: Context, path: str) -> UrlPath:
         raise Exception(
             f'Error in {url} - page_url = {page_url} - path = {path}'
         ) from exc
-    return path_url.as_absolute()
+    return path_url.absolute()
 
 
 @pass_context

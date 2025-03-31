@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en-US">
+	<head>
+		<title>{{ page.title }}</title>
+		<link rel="stylesheet" href="/styles/page.css">
+		<script src="/js/script.js" type="module"></script>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta charset="UTF-8">
+	</head>
+	<body>
+		{% filter indent(width='\t\t') -%}
+		{% include header.html %}
+		{%- endfilter %}
+		<main>
+			{%- for post in site.tags[page.tag] | sort(attribute='title') %}
+			<div class="post">
+				<div class="post-title">{{ post.title }}</div>
+				<div class="word-count">Word count: {{ post.word_count }}</div>
+				<div class="excerpt">
+					{{ post.excerpt | indent(width='\t\t\t\t\t') }}
+				</div>
+			</div>
+			{%- endfor %}
+		</main>
+	</body>
+</html>
