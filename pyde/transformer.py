@@ -6,7 +6,6 @@ import shutil
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -24,10 +23,20 @@ from jinja2 import Template
 from markupsafe import Markup
 
 from pyde.path.filepath import WriteablePath
+from pyde.path.virtual import VirtualPath
 
 from .data import Data
 from .markdown import markdownify
-from .path import AnyDest, AnySource, FilePath, LocalPath, ReadablePath, UrlPath, source
+from .path import (
+    AnyDest,
+    AnySource,
+    FilePath,
+    LocalPath,
+    ReadablePath,
+    UrlPath,
+    dest,
+    source,
+)
 from .utils import Maybe, ilen, merge_dicts
 from .yaml import parse_yaml_dict
 
@@ -35,9 +44,9 @@ TO_FORMAT_STR_RE = re.compile(r':(\w+)')
 DEFAULT_PERMALINK = '/:path/:name'
 UNSET: Any = object()
 
+
 class TransformerType(Protocol):
-    @property
-    def source(self) -> ReadablePath: ...
+    def __init__(self, src_path: ReadablePath, /, **kwargs: Any): ...
 
     @property
     def outputs(self) -> WriteablePath: ...
@@ -48,40 +57,28 @@ class TransformerType(Protocol):
     @metadata.setter
     def metadata(self, meta: dict[str, Any]) -> None: ...
 
-    def transform(self, data: AnyStr) -> str | bytes: ...
+    def preprocess(
+        self, path: ReadablePath, src_root: ReadablePath, dest_root: WriteablePath,
+    ) -> Self: ...
 
-    def pipe(self, **meta: Any) -> Transformer: ...
-
-    def preprocess(self, src_root: AnySource) -> Self: ...
-
-    def transform_from_file(self, src_root: AnySource) -> str | bytes:
-        input = source(src_root) / self.source
-        data = input.read_bytes()
-        return self.transform(data)
-
-    def transform_to_file(
-        self, data: AnyStr, dest_root: AnyDest
-    ) -> WriteablePath:
-        output = dest_root / self.outputs
-        output.parent.mkdir(parents=True, exist_ok=True)
-        transformed = self.transform(data)  # pylint: disable=assignment-from-no-return
-        if isinstance(transformed, bytes):
-            output.write_bytes(transformed)
-        else:
-            output.write_text(transformed)
-        return output
+    def transform_data(self, data: AnyStr) -> str | bytes: ...
 
     def transform_file(
-        self, src_root: AnySource, dest_root: AnyDest
+        self, source: ReadablePath, dest: WriteablePath
     ) -> WriteablePath:
-        input = source(src_root) / self.source
-        data = input.read_bytes()
-        return self.transform_to_file(data, dest_root)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        data = source.read_bytes()
+        transformed = self.transform_data(data)  # pylint: disable=assignment-from-no-return
+        if isinstance(transformed, bytes):
+            dest.write_bytes(transformed)
+        else:
+            dest.write_text(transformed)
+        return dest
 
 
 @dataclass(frozen=True)
 class TransformerRegistration:
-    transformer: Type[Transformer]
+    transformer: Type[TransformerType]
     wants: Callable[[FilePath], bool]
 
 
@@ -93,7 +90,7 @@ class Transformer(TransformerType):
 
     def __new__(
         cls,
-        src_path: ReadablePath | Path | str,
+        src_path: AnySource,
         /, *,
         parse_frontmatter: bool=True,
         permalink: str=DEFAULT_PERMALINK,
@@ -104,7 +101,7 @@ class Transformer(TransformerType):
         _ = meta
         src_path = source(src_path)
         if cls is Transformer:
-            transformers: list[type[Transformer]] = []
+            transformers: list[type[TransformerType]] = []
             if parse_frontmatter:
                 transformers.append(MetaTransformer)
             if metaprocessor:
@@ -121,7 +118,8 @@ class Transformer(TransformerType):
                     transformers=transformers, metaprocessor=metaprocessor,
                     **meta,
                 )
-            cls = transformers[0]
+            # If there's only one, it's the obligatory CopyTransformer.
+            cls = cast(type[CopyTransformer], transformers[0])
         return super().__new__(cls)  # pyright: ignore
 
     def __init_subclass__(cls, /, pattern: str='', **kwargs: Any):
@@ -131,6 +129,22 @@ class Transformer(TransformerType):
         elif matcher := getattr(cls, f'__{cls.__name__}_match_path', None):
             Transformer.register(cls, matcher)
 
+    def __init__(self, src_path: AnySource, /, **kwargs: Any):
+        self._source = source(src_path)
+        self._meta = kwargs
+
+    def transform(self) -> WriteablePath:
+        raise NotImplementedError('Base class does not implement transform')
+
+    @property
+    def source(self) -> ReadablePath:
+        return self._source
+
+    def pipe(self, **meta: Any) -> Transformer:
+        next = Transformer(self.outputs, **meta)
+        return PipelineTransformer(
+            self.source, pipeline=[self, next],
+        )
 
     @staticmethod
     def _pattern_matcher(pattern: str) -> Callable[[FilePath], bool]:
@@ -147,10 +161,6 @@ class Transformer(TransformerType):
         cls.registered.append(TransformerRegistration(transformer, wants))
         return cls
 
-    @property
-    def source(self) -> ReadablePath:
-        return self._source
-
     # Phony implementations of the TransformerType protocol just to convince
     # type checkers that it's okay to try calling `Transformer(...)` even
     # though it's abstract.
@@ -163,32 +173,23 @@ class Transformer(TransformerType):
         @metadata.setter
         def metadata(self, meta: dict[str, Any]) -> None:
             _ = meta
-        def _set_meta(self, meta: dict[str, Any]) -> Self:
-            _ = meta
+        def preprocess(
+            self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
+        ) -> Self:
+            _ = source, src_root, dest_root
             return self
-        def pipe(self, **meta: Any) -> Transformer:
-            _ = meta
-            return self
-        def preprocess(self, src_root: AnySource) -> Self:
-            _ = src_root
-            return self
-        def transform_from_file(self, src_root: AnySource) -> str | bytes:
-            return str(src_root)
-        def transform_to_file(
-            self, data: AnyStr, dest_root: AnyDest
-        ) -> WriteablePath:
-            return cast(WriteablePath, data)
         def transform_file(
-            self, src_root: AnySource, dest_root: AnyDest
+            self, source: ReadablePath, dest: WriteablePath
         ) -> WriteablePath:
-            return cast(WriteablePath, (src_root, dest_root))
-        def transform(self, data: AnyStr) -> str | bytes:
+            return cast(WriteablePath, (source, dest))
+        def transform_data(self, data: AnyStr) -> str | bytes:
             return data
 
 
 class BaseTransformer(Transformer):
-    __slots__ = ('_preprocessed',)
-    _preprocessed: ReadablePath | None
+    __slots__ = ('_src_root', '_dest_root', '_source', '_meta')
+    _src_root: ReadablePath | None
+    _dest_root: WriteablePath | None
 
     def __init__(
         self,
@@ -200,20 +201,24 @@ class BaseTransformer(Transformer):
         metaprocessor: MetaProcessor | None=None,
         **meta: Any,
     ):
-        super().__init__()
+        super().__init__(src_path, **meta)
+        # The init method needs to handle this for the ease of implementing
+        # subclasses that only care about some of this information, but here
+        # we explicitly ignore the Template constructor arguments that spawn
+        # each instance within a pipeline.
         _ = parse_frontmatter, permalink, template, metaprocessor
         self._source = source(src_path)
-        self._meta = meta
-        self._preprocessed = None
+        self._src_root = None
+        self._dest_root = None
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}({str(self.source)!r})'
 
     def transformed_name(self) -> str:
-        return self._source.name
+        return self.source.name
 
     def get_output_path(self) -> WriteablePath:
-        return self._source.parent / self.transformed_name()
+        return self.source.parent / self.transformed_name()
 
     @property
     def outputs(self) -> WriteablePath:
@@ -233,21 +238,57 @@ class BaseTransformer(Transformer):
         return self
 
     def pipe(self, **meta: Any) -> Transformer:
-        next = Transformer(self.outputs, **meta)
-        return PipelineTransformer(
-            self.source, pipeline=[self, next],
+        pipeline = super().pipe(**meta)
+        if self.has_preprocessed():
+            pipeline.preprocess(self.source, self.src_root, self.dest_root)
+        return pipeline
+
+    @property
+    def src_root(self) -> ReadablePath:
+        if self._src_root is not None:
+            return self._src_root
+        raise RuntimeError(
+            "Transformer hasn't been preprocessed. Unknown source/dest directories."
         )
 
-    def preprocess(self, src_root: AnySource) -> Self:
-        self._preprocessed = source(src_root)
+    @property
+    def dest_root(self) -> WriteablePath:
+        if self._dest_root is not None:
+            return self._dest_root
+        raise RuntimeError(
+            "Transformer hasn't been preprocessed. Unknown source/dest directories."
+        )
+
+    def preprocess(
+        self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
+    ) -> Self:
+        self._source = source(path)
+        self._src_root = source(src_root)
+        self._dest_root = dest(dest_root)
         return self
+
+    def transform(self) -> WriteablePath:
+        input = self.src_root / self.source
+        output = self.dest_root / self.outputs
+        return self.transform_file(input, output)
+
+    def has_preprocessed(
+        self,
+        path: AnySource | None = None,
+        src_root: AnySource | None = None,
+        dest_root: AnyDest | None = None,
+    ) -> bool:
+        if path is None or src_root is None or dest_root is None:
+            return (path, self._src_root, self._dest_root) != (None, None, None)
+        return (path, self._src_root, self._dest_root) == (
+            source(path), source(src_root), dest(dest_root)
+        )
 
 
 class PipelineTransformer(BaseTransformer):
-    _pipeline: Sequence[Transformer]
+    _pipeline: Sequence[TransformerType]
 
-    @property
-    def outputs(self) -> WriteablePath:
+    def get_output_path(self) -> WriteablePath:
         return self._pipeline[-1].outputs
 
     def _set_meta(self, meta: dict[str, Any]) -> Self:
@@ -256,26 +297,37 @@ class PipelineTransformer(BaseTransformer):
             pipe.metadata = self.metadata
         return self
 
-    def preprocess(self, src_root: AnySource) -> Self:
-        src_root = source(src_root)
-        if self._preprocessed == src_root:
+    def preprocess(
+        self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
+    ) -> Self:
+        if self.has_preprocessed(path, src_root, dest_root):
             return self
+        super().preprocess(path, src_root, dest_root)
         metadata: dict[str, Any] = self.metadata
         input = self.source
+        input_dir = self.src_root
+        output_dir = VirtualPath(self.dest_root)
         for pipe in self._pipeline:
             pipe.metadata = metadata
-            pipe._source = input
-            pipe.preprocess(src_root)
+            pipe.preprocess(input, input_dir, output_dir)
             input = pipe.outputs
-        self._preprocessed = src_root
+            input_dir = VirtualPath(src_root)
         return self
 
-    def transform(self, data: AnyStr) -> str | bytes:
+    def transform(self) -> WriteablePath:
+        input = self.src_root / self.source
+        dest = self.dest_root / self.outputs
+        for pipe in self._pipeline[:-1]:
+            input = pipe.transform_file(input, VirtualPath(dest))
+        pipe = self._pipeline[-1]
+        return pipe.transform_file(input, dest)
+
+    def transform_data(self, data: AnyStr) -> str | bytes:
         current_data: str | bytes = data
         metadata: dict[str, Any] = self.metadata
         for pipe in self._pipeline:
             pipe.metadata = metadata
-            current_data = pipe.transform(cast(AnyStr, current_data))
+            current_data = pipe.transform_data(cast(AnyStr, current_data))
         return current_data
 
     def __repr__(self) -> str:
@@ -284,17 +336,16 @@ class PipelineTransformer(BaseTransformer):
 
     def __init__(
         self, src_path: AnySource, /, *,
-        pipeline: Sequence[Transformer]=UNSET,
+        pipeline: Sequence[TransformerType]=UNSET,
         permalink: str=DEFAULT_PERMALINK,
         **meta: Any
     ):
         super().__init__(src_path, **meta)
         if pipeline is not UNSET:
             self._pipeline = pipeline
-        self._preprocessed = None
         self._permalink = permalink
 
-    def __getitem__(self, idx: int | slice) -> Transformer | PipelineTransformer:
+    def __getitem__(self, idx: int | slice) -> TransformerType | PipelineTransformer:
         if isinstance(idx, slice):
             pipe_tf = PipelineTransformer(
                 self.source,
@@ -306,9 +357,11 @@ class PipelineTransformer(BaseTransformer):
 
     def _partitioned(
         self
-    ) -> tuple[Maybe[MetaTransformer], Sequence[Transformer], Maybe[CopyTransformer]]:
+    ) -> tuple[
+        Maybe[MetaTransformer], Sequence[TransformerType], Maybe[CopyTransformer]
+    ]:
         meta_tf: Maybe[MetaTransformer] = Maybe.no()
-        tfs: list[Transformer] = []
+        tfs: list[TransformerType] = []
         copy_tf: Maybe[CopyTransformer] = Maybe.no()
         for tf in self._pipeline:
             match tf:
@@ -330,10 +383,10 @@ class PipelineTransformer(BaseTransformer):
         current_metatf, current_pipeline, current_copytf = self._partitioned()
         # Also split off the extra MetaTransformer from the start of next.
         next_metatf, next_pipeline, next_copytf = next._partitioned()
-        # Pipelines created by a call to `Transformer` are guaranteed to start
-        # with a MetaTransformer and end with a CopyTransformer, but there's no
-        # way of knowing if self was created that way. Either way, make sure
-        # the pipeline starts and ends properly.
+        # Pipelines created by a call to `Transformer` should start with a
+        # MetaTransformer and end with a CopyTransformer, but there's no way of
+        # knowing if self was created that way. Either way, make sure the
+        # pipeline starts and ends properly.
         head = [
             *current_metatf.or_maybe(next_metatf),
             *current_pipeline,
@@ -354,8 +407,8 @@ class PipelineTransformer(BaseTransformer):
             ]
         updated = PipelineTransformer(self.source, pipeline=head + tail)
         updated.metadata = self.metadata
-        if (src_path := self._preprocessed) is not None:
-            updated.preprocess(src_path)
+        if self.has_preprocessed():
+            updated.preprocess(self.source, self.src_root, self.dest_root)
         return updated
 
     @classmethod
@@ -363,10 +416,10 @@ class PipelineTransformer(BaseTransformer):
         cls,
         src_path: AnySource,
         /, *,
-        transformers: Sequence[Type[Transformer]],
+        transformers: Sequence[Type[TransformerType]],
         **meta: Any
     ) -> PipelineTransformer:
-        tfs: list[Transformer] = []
+        tfs: list[TransformerType] = []
         src_path = source(src_path)
         metadata: dict[str, Any] = {}
         for transformer_type in transformers:
@@ -393,7 +446,7 @@ class CopyTransformer(BaseTransformer):
         super().__init__(src_path, **meta)
         self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
         self._collection_root = source(collection_root)
-        if collection_root not in self._source.parents:
+        if collection_root not in self.source.parents:
             # This state indicates the path has already been generated,
             # an outcome that can happen if two CopyTransformers are
             # present in the same pipeline.
@@ -409,33 +462,32 @@ class CopyTransformer(BaseTransformer):
             self.metadata['url'] = self.metadata['path']
         return self
 
-    def preprocess(self, src_root: AnySource) -> Self:
-        if self._preprocessed is not None:
-            super().preprocess(src_root)
+    def preprocess(
+        self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
+    ) -> Self:
+        if not self.has_preprocessed(path, src_root, dest_root):
+            super().preprocess(path, src_root, dest_root)
             self._generate_path_info()
         return self
 
     def __repr__(self) -> str:
         return (
-            f'{self.__class__.__name__}(source={str(self._source)!r},'
+            f'{self.__class__.__name__}(source={str(self.source)!r},'
             f' permalink={self._permalink!r})'
         )
 
     def transform_file(
-        self, src_root: AnySource, dest_root: AnyDest
+        self, source: ReadablePath, dest: WriteablePath
     ) -> WriteablePath:
-        src_root = source(src_root)
-        in_path = src_root / self.source
-        out_path = dest_root / self.outputs
         # If these are both real paths, no need read and write the bytes, just
         # copy the file.
-        if isinstance(in_path, os.PathLike) and isinstance(out_path, os.PathLike):
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(in_path, out_path)
-            return out_path
-        return self.transform_to_file(in_path.read_bytes(), dest_root)
+        if isinstance(source, os.PathLike) and isinstance(dest, os.PathLike):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(source, dest)
+            return dest
+        return super().transform_file(source, dest)
 
-    def transform(self, data: AnyStr) -> AnyStr:
+    def transform_data(self, data: AnyStr) -> AnyStr:
         return data
 
     @overload
@@ -443,7 +495,7 @@ class CopyTransformer(BaseTransformer):
     @overload
     def _get_path(self, as_filename: Literal[True]) -> LocalPath: ...
     def _get_path(self, as_filename: bool=False) -> FilePath:
-        path = self._source.parent / self.transformed_name()
+        path = self.source.parent / self.transformed_name()
         path_components = {
             'path': path.parent.relative_to(self._collection_root),
             'name': path.name,
@@ -473,7 +525,7 @@ class CopyTransformer(BaseTransformer):
 
 
 class TextTransformer(BaseTransformer, ABC):
-    def transform(self, data: AnyStr) -> str:
+    def transform_data(self, data: AnyStr) -> str:
         text = data.decode('utf8') if isinstance(data, bytes) else data
         return self.transform_text(text)
 
@@ -486,7 +538,7 @@ class MarkdownTransformer(TextTransformer, pattern='*.md'):
     PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)
 
     def transformed_name(self) -> str:
-        return str(self._source.with_suffix('.html').name)
+        return str(self.source.with_suffix('.html').name)
 
     def transform_text(self, text: str) -> str:
         html = markdownify(text)
@@ -540,8 +592,12 @@ class MetaTransformer(TextTransformer):
     ):
         super().__init__(src_path, **meta)
 
-    def preprocess(self, src_root: AnySource) -> Self:
-        self.transform_from_file(src_root)
+    def preprocess(
+        self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
+    ) -> Self:
+        super().preprocess(path, src_root, dest_root)
+        input = self.src_root / self.source
+        self.transform_data(input.read_bytes())
         return self
 
     def transform_text(self, text: str) -> str:

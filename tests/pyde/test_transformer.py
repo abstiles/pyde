@@ -29,7 +29,7 @@ def test_markdown_transform() -> None:
     path = Path('path/to/post.md')
     tf = Transformer(path)
 
-    assert tf.transform(
+    assert tf.transform_data(
         'Hello *there,* world'
     ) == '<p>Hello <em>there,</em> world</p>'
 
@@ -41,7 +41,7 @@ def test_template_transform() -> None:
         path, template=template, name='friend'
     )
 
-    assert tf.transform('world') == 'Hello world, friend'
+    assert tf.transform_data('world') == 'Hello world, friend'
 
 
 def test_markdown_template_transform() -> None:
@@ -49,7 +49,7 @@ def test_markdown_template_transform() -> None:
     template = Template('<html><body>{{ content }}</body></html>')
     tf = Transformer(path, template=template)
 
-    assert tf.transform(
+    assert tf.transform_data(
         'Hello *there,* world'
     ) == '<html><body><p>Hello <em>there,</em> world</p></body></html>'
 
@@ -59,7 +59,7 @@ def test_markdown_template_pipeline() -> None:
     template = Template('<html><body>{{ content }}</body></html>')
     tf = Transformer(path).pipe(template=template)
 
-    assert tf.transform(
+    assert tf.transform_data(
         'Hello *there,* world'
     ) == '<html><body><p>Hello <em>there,</em> world</p></body></html>'
 
@@ -88,7 +88,7 @@ def test_metadata_template() -> None:
     )
     tf = Transformer(path, metaprocessor=metaprocessor)
 
-    assert tf.transform(content).rstrip() == dedent(
+    assert tf.transform_data(content).rstrip() == dedent(
         '''\
             # Some Title
 
@@ -111,7 +111,7 @@ def test_markdown_with_metadata() -> None:
     )
     tf = Transformer(path, metaprocessor=metaprocessor)
 
-    assert tf.transform(content).rstrip() == dedent(
+    assert tf.transform_data(content).rstrip() == dedent(
         '''\
             <h1>Some Title</h1>
             <p>Hello, world!</p>
@@ -142,7 +142,7 @@ def test_metadata_on_template() -> None:
     template = Template(template_str)
     tf = Transformer(path, template=template)
 
-    assert tf.transform(content).rstrip() == dedent(
+    assert tf.transform_data(content).rstrip() == dedent(
         '''\
             <html>
                 <body>
@@ -178,7 +178,7 @@ def test_metadata_joined() -> None:
     )
     template = Template(template_str)
     tf = Transformer(path, template=template, permalink='/:path/:basename')
-    tf.preprocess(Path('.')).transform_from_file(Path('.'))
+    tf.preprocess(path).transform()
     assert tf.metadata == {
         'path': UrlPath('/path/to/post'),
         'url': UrlPath('/path/to/post'),

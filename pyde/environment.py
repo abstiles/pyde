@@ -76,7 +76,7 @@ class Environment:
         # Check to see what already exists in the output directory.
         existing_files = set(self.output_dir.rglob('*'))
         built_files = (
-            file.render(self.root, self.output_dir) for file in self.site
+            file.render() for file in self.site
         )
         # Grab the output files and all the parent directories that might have
         # been created as part of the build.
@@ -127,10 +127,16 @@ class Environment:
         source: ReadablePath
         for source in map(LocalPath, self.source_files()):
             if not self.should_transform(source):
-                yield SiteFile(CopyTransformer(source, file=source), 'raw')
+                yield SiteFile(
+                    CopyTransformer(
+                        source, file=source
+                    ).preprocess(source, self.root, self.output_dir),
+                    'raw',
+                )
                 continue
             values = self.get_default_values(source)
-            tf = Transformer(source, **(base | values)).preprocess(self.root)
+            tf = Transformer(source, **(base | values))
+            tf.preprocess(source, self.root, self.output_dir)
             layout = tf.metadata.get('layout', values['layout'])
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
@@ -154,7 +160,7 @@ class Environment:
                         **base, **values, 'title': tag.title(), 'tag': tag,
                         'template': template,
                     }
-                ).preprocess(self.root)
+                ).preprocess(source, self.root, self.output_dir)
                 yield SiteFile.meta(tf)
 
         return tags
@@ -232,11 +238,8 @@ class SiteFile:
             return cls(tf, 'page')
         return cls(tf, 'raw')
 
-    def render(
-        self, input_dir: ReadablePath, output_dir: WriteablePath
-    ) -> WriteablePath:
-        result = self.tf.transform_file(input_dir, output_dir)
-        return result
+    def render(self) -> WriteablePath:
+        return self.tf.transform()
 
     @property
     def source(self) -> ReadablePath:
