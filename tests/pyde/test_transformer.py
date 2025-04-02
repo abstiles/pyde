@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, cast
@@ -161,6 +162,7 @@ def test_metadata_joined() -> None:
             '''\
                 ---
                 title: Some Title
+                date: 1970-01-01
                 ---
                 Hello, world!
             '''
@@ -180,6 +182,7 @@ def test_metadata_joined() -> None:
     tf = Transformer(path, template=template, permalink='/:path/:basename')
     tf.preprocess(path).transform()
     assert tf.metadata == {
+        'date': datetime.fromisoformat('1970-01-01'),
         'path': UrlPath('/path/to/post'),
         'url': UrlPath('/path/to/post'),
         'dir': '/path/to/',

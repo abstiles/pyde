@@ -22,7 +22,7 @@ from typing import (
 from jinja2 import Template
 from markupsafe import Markup
 
-from .data import Data
+from .data import AutoDate, Data
 from .markdown import markdownify
 from .path import (
     AnyDest,
@@ -598,6 +598,8 @@ class MetaTransformer(TextTransformer):
         super().preprocess(path, src_root, dest_root)
         input = self.src_root / self.source
         self.transform_data(input.read_bytes())
+        if 'date' not in self.metadata:
+            self.metadata['date'] = AutoDate(input.timestamp())
         return self
 
     def transform_text(self, text: str) -> str:

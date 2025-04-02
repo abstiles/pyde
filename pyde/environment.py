@@ -166,6 +166,7 @@ class Environment:
 
         for tag, pages in tags.items():
             if len(pages) >= self.config.tags.minimum:
+                pages.sort(key=lambda p: p.metadata.date, reverse=True)
                 source = VirtualPath(self.config.tags.path / f'{slugify(tag)}.html')
                 values = self.get_default_values(source)
                 template_name = f'{self.config.tags.template}.html'
@@ -190,7 +191,7 @@ class Environment:
             for collection, posts in collections.items():
                 if len(posts) / self.config.paginate.size <= 1:
                     continue
-                posts.sort(key=lambda p: p.metadata.title)
+                posts.sort(key=lambda p: p.metadata.date, reverse=True)
                 paginations = batched(posts, self.config.paginate.size)
                 for idx, page_posts in enumerate(paginations, start=1):
                     source = VirtualPath(self.config.posts.source / 'page.html')

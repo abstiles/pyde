@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import platform
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, TypeAlias, overload, runtime_checkable
@@ -50,6 +52,7 @@ class ReadablePath(FilePath, Protocol):
     def parents(self) -> Sequence['LocalPath']: ...
     def __truediv__(self, key: Path | PydePath) -> ReadablePath: ...
     def __rtruediv__(self, key: Path | PydePath) -> ReadablePath: ...
+    def timestamp(self) -> datetime: ...
 
 
 @runtime_checkable
@@ -179,6 +182,17 @@ class _LocalPath(WriteablePath, os.PathLike[str]):
                 return self.__class__(result)
             return result
         return wrapper
+
+    def timestamp(self) -> datetime:
+        stat = self._path.stat()
+        try:
+            timestamp = stat.st_birthtime
+        except AttributeError:
+            timestamp = (
+                stat.st_ctime if platform.system() == 'Windows'
+                else stat.st_mtime
+            )
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
 LocalPath = _LocalPath  # pyright: ignore

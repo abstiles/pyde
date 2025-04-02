@@ -12,9 +12,10 @@
 		{% include header.html %}
 		{%- endfilter %}
 		<main>
-			{%- for post in page.posts.list | sort(attribute='title') %}
+			{%- for post in page.posts.list %}
 			<div class="post">
 				<div class="post-title">{{ post.title }}</div>
+				<div class="date">{{ post.date }}</div>
 				<div class="word-count">Word count: {{ post.word_count }}</div>
 				<div class="excerpt">
 					{{ post.excerpt | indent(width='\t\t\t\t\t') }}

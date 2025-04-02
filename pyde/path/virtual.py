@@ -1,3 +1,4 @@
+from datetime import datetime
 import io
 import textwrap
 from collections.abc import Sequence
@@ -24,6 +25,7 @@ class VirtualPath(WriteablePath):
             content if isinstance(content, bytes)
             else content.encode('utf8')
         )
+        self._timestamp = datetime.now()
 
     @property
     def _content_str(self) -> str:
@@ -111,3 +113,6 @@ class VirtualPath(WriteablePath):
             text = f.getvalue()
         self._content = text.encode(encoding or 'utf8', errors or 'strict')
         return len(self._content)
+
+    def timestamp(self) -> datetime:
+        return self._timestamp

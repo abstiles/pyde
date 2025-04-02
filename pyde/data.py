@@ -216,10 +216,10 @@ def text_file(contents: str) -> str:
 
 
 class AutoDate:
-    def __init__(self, when: str | AutoDate, /):
-        if isinstance(when, AutoDate):
-            when = str(when)
-        self._when = self.to_date_or_datetime(when)
+    def __init__(self, when: str | date | AutoDate, /):
+        self._when = (
+            when if isinstance(when, date) else self.to_date_or_datetime(when)
+        )
 
     def __str__(self) -> str:
         datefmt, timefmt = '%Y-%m-%d', ' %H:%M:%S %z'
@@ -258,7 +258,9 @@ class AutoDate:
         return self.datetime == AutoDate(other).datetime
 
     @staticmethod
-    def to_date_or_datetime(dt: str) -> datetime | date:
+    def to_date_or_datetime(dt: Any) -> datetime | date:
+        if not isinstance(dt, str):
+            dt = str(dt)
         if dt == 'now':
             return datetime.now(timezone.utc)
         if dt == 'today':
