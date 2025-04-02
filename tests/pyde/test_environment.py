@@ -45,6 +45,7 @@ def get_config(**kwargs: Any) -> Config:
                 },
             ],
             'tags': 'tag',
+            'paginate': {'template': 'tag', 'size': 2},
             **kwargs,
         }
     )
@@ -67,6 +68,7 @@ SOURCE_FILES = {
     'js/script.js',
     '_posts/post.md',
     '_posts/another-post.md',
+    '_posts/third-post.md',
     'styles/base.css',
 }
 RAW_OUTPUTS = {
@@ -79,6 +81,8 @@ PAGE_OUTPUTS = {
 META_OUTPUTS = {
     'tag/test.html',
     'tag/tag-with-spaces.html',
+    'posts/page.1.html',
+    'posts/page.2.html',
 }
 DRAFT_OUTPUTS = {
     'drafts/WIP.html',
@@ -86,6 +90,7 @@ DRAFT_OUTPUTS = {
 POST_OUTPUTS = {
     'posts/post.html',
     'posts/another-post.html',
+    'posts/third-post.html',
 }
 OUTPUT_FILES = RAW_OUTPUTS | PAGE_OUTPUTS | POST_OUTPUTS | META_OUTPUTS
 DRAFT_OUTPUT_FILES = OUTPUT_FILES | DRAFT_OUTPUTS
@@ -117,11 +122,12 @@ def test_environment_output_drafts() -> None:
 def test_build() -> None:
     env = get_env(drafts=True)
     env.build()
+    print('Output:', '\n'.join(map(str, OUT_DIR.rglob('**/*'))))
     for file in DRAFT_OUTPUT_FILES:
         expected = EXPECTED_DIR / file
         actual = OUT_DIR / file
 
-        assert actual.exists()
+        assert actual.exists(), f'{str(actual)!r} not found'
         assert actual.read_text().rstrip() == expected.read_text().rstrip()
 
 def test_build_cleanup() -> None:

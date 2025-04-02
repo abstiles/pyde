@@ -7,6 +7,7 @@ from collections.abc import Generator, Mapping, Sequence
 from functools import partial
 from glob import glob
 from itertools import islice
+from math import ceil
 from os import PathLike
 from pathlib import Path
 from typing import (
@@ -24,12 +25,18 @@ from typing import (
 
 from .config import Config
 from .data import Data
-from .path import UrlPath
-from .path.filepath import FilePath, LocalPath, ReadablePath, WriteablePath
+from .path import UrlPath, FilePath, LocalPath, ReadablePath, WriteablePath
 from .path.virtual import VirtualPath
 from .templates import TemplateManager
 from .transformer import CopyTransformer, Transformer
-from .utils import CaseInsensitiveStr, ReturningGenerator, flatmap, seq_pivot, slugify
+from .utils import (
+    CaseInsensitiveStr,
+    ReturningGenerator,
+    batched,
+    flatmap,
+    seq_pivot,
+    slugify,
+)
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -124,6 +131,7 @@ class Environment:
             "links": [],
         }
         tags: dict[Tag, list[SiteFile]] = {}
+        collections: dict[str, list[SiteFile]] = {}
         source: ReadablePath
         for source in map(LocalPath, self.source_files()):
             if not self.should_transform(source):
@@ -134,13 +142,20 @@ class Environment:
                     'raw',
                 )
                 continue
+
             values = self.get_default_values(source)
-            tf = Transformer(source, **(base | values))
-            tf.preprocess(source, self.root, self.output_dir)
+            tf = Transformer(source, **(base | values)).preprocess(
+                source, self.root, self.output_dir
+            )
             layout = tf.metadata.get('layout', values['layout'])
             template_name = f'{layout}{tf.outputs.suffix}'
             template = self.template_manager.get_template(template_name)
+
             site_file = SiteFile.classify(tf.pipe(template=template))
+            if site_file.type == 'post':
+                collections.setdefault(site_file.metadata.collection, []).append(
+                    site_file
+                )
             page_tags = tf.metadata.get('tags') or []
             for tag in page_tags:
                 tags.setdefault(tag, []).append(site_file)
@@ -159,10 +174,51 @@ class Environment:
                     source, **{
                         **base, **values, 'title': tag.title(), 'tag': tag,
                         'template': template,
+                        'posts': Data({
+                            'list': [page.metadata for page in pages],
+                            'tag': tag,
+                            # No pagination of tags yet.
+                            'size': len(pages),
+                            'total_posts': len(pages),
+                        }),
                     }
                 ).preprocess(source, self.root, self.output_dir)
                 yield SiteFile.meta(tf)
 
+        # All this needs to be abstracted
+        if self.config.paginate:
+            for collection, posts in collections.items():
+                if len(posts) / self.config.paginate.size <= 1:
+                    continue
+                posts.sort(key=lambda p: p.metadata.title)
+                paginations = batched(posts, self.config.paginate.size)
+                for idx, page_posts in enumerate(paginations, start=1):
+                    source = VirtualPath(self.config.posts.source / 'page.html')
+                    values = self.get_default_values(source)
+                    template_name = f'{self.config.paginate.template}.html'
+                    template = self.template_manager.get_template(template_name)
+                    tf = Transformer(
+                        source, **{
+                            **base, **values,
+                            'title': f'{collection.title()} Page {idx}',
+                            'template': template,
+                            'collection': collection,
+                            'permalink': self.config.paginate.permalink,
+                            'num': idx,
+                            'posts': Data({
+                                'list': [page.metadata for page in page_posts],
+                                'num': idx,
+                                'size': self.config.paginate.size,
+                                'total_posts': len(posts),
+                                'total_pages': ceil(
+                                    len(posts) / self.config.paginate.size
+                                ),
+                                'previous': None,
+                                'next': None,
+                            }),
+                        }
+                    ).preprocess(source, self.root, self.output_dir)
+                    yield SiteFile.meta(tf)
         return tags
 
     def get_default_values(self, source: FilePath) -> dict[str, Any]:

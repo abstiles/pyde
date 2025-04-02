@@ -86,11 +86,19 @@ class CollectionSpec:
             object.__setattr__(self, 'source', source_dir)
         else:
             object.__setattr__(
-                self, 'source', source_dir.replace(':collection', self.name)
+                self, 'source', Path(source_dir.replace(':collection', self.name))
             )
-        object.__setattr__(
-            self, 'permalink', self.permalink.replace(':collection', self.name)
-        )
+
+
+@dataclass(frozen=True)
+class PaginationSpec:
+    template: str = ''
+    size: int = 20
+    permalink: str = '/:collection/page.:num'
+
+    def __bool__(self) -> bool:
+        return bool(self.template) and self.size > 0
+
 
 @dataclass
 class Config:
@@ -109,17 +117,18 @@ class Config:
     drafts_dir: Path = Path('_drafts')
     posts: CollectionSpec = CollectionSpec('posts')
     tags: TagSpec = TagSpec()
-    # TODO: Generate pages!
-    paginate_path: str = '/:collection/page.:num'
+    paginate: PaginationSpec = PaginationSpec()
 
     def __post_init__(self) -> None:
         self.defaults.extend([
             DefaultSpec.make(
-                self.posts.source, type='post',
+                self.posts.source, type='post', collection=self.posts.name,
                 collection_root=Path(self.posts.source),
                 permalink=self.posts.permalink
             ),
-            DefaultSpec.make(self.drafts_dir, type='post', draft=True),
+            DefaultSpec.make(
+                self.drafts_dir, type='post', draft=True, collection='drafts',
+            ),
             DefaultSpec.make(
                 self.tags.path, type='meta', layout=self.tags.template,
             ),

@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Generator, Mapping, Reversible, Sequence
 from dataclasses import fields, is_dataclass
 from functools import wraps
-from itertools import chain, count
+from itertools import chain, count, islice
 from types import GenericAlias
 from typing import (
     TYPE_CHECKING,
@@ -464,3 +464,12 @@ class ReturningGenerator(Generic[T, U]):
         if not self._iterated:
             consumeall(self._generator)
         return self._value
+
+
+def batched(iterable: Iterable[T], n: int) -> Iterable[Sequence[T]]:
+    """batched('ABCDEFG', 3) → ABC DEF G"""
+    if n < 1:
+        raise ValueError('n must be at least one')
+    iterator = iter(iterable)
+    while batch := tuple(islice(iterator, n)):
+        yield batch

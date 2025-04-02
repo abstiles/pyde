@@ -22,9 +22,6 @@ from typing import (
 from jinja2 import Template
 from markupsafe import Markup
 
-from pyde.path.filepath import WriteablePath
-from pyde.path.virtual import VirtualPath
-
 from .data import Data
 from .markdown import markdownify
 from .path import (
@@ -33,7 +30,9 @@ from .path import (
     FilePath,
     LocalPath,
     ReadablePath,
+    WriteablePath,
     UrlPath,
+    VirtualPath,
     dest,
     source,
 )
@@ -444,6 +443,7 @@ class CopyTransformer(BaseTransformer):
         **meta: Any,
     ):
         super().__init__(src_path, **meta)
+        self._permalink = permalink
         self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
         self._collection_root = source(collection_root)
         if collection_root not in self.source.parents:

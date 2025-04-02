@@ -12,7 +12,7 @@
 		{% include header.html %}
 		{%- endfilter %}
 		<main>
-			{%- for post in site.tags[page.tag] | sort(attribute='title') %}
+			{%- for post in page.posts.list | sort(attribute='title') %}
 			<div class="post">
 				<div class="post-title">{{ post.title }}</div>
 				<div class="word-count">Word count: {{ post.word_count }}</div>
