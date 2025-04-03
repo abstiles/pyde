@@ -83,6 +83,7 @@ META_OUTPUTS = {
     'tag/tag-with-spaces.html',
     'posts/page.1.html',
     'posts/page.2.html',
+    'posts/index.html',
 }
 DRAFT_OUTPUTS = {
     'drafts/WIP.html',

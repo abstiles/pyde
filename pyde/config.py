@@ -65,7 +65,7 @@ class DefaultSpec:
 @dataclass(frozen=True)
 class TagSpec:
     template: str = ''
-    path: Path = Path('tag')
+    permalink: str = '/tag/:tag'
     minimum: int | bool = 2
 
     @property
@@ -128,9 +128,6 @@ class Config:
             ),
             DefaultSpec.make(
                 self.drafts_dir, type='post', draft=True, collection='drafts',
-            ),
-            DefaultSpec.make(
-                self.tags.path, type='meta', layout=self.tags.template,
             ),
         ])
 

@@ -469,7 +469,7 @@ class ReturningGenerator(Generic[T, U]):
 def batched(iterable: Iterable[T], n: int) -> Iterable[Sequence[T]]:
     """batched('ABCDEFG', 3) → ABC DEF G"""
     if n < 1:
-        raise ValueError('n must be at least one')
+        yield tuple(iterable)
     iterator = iter(iterable)
     while batch := tuple(islice(iterator, n)):
         yield batch

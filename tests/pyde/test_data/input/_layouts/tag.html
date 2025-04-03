@@ -12,7 +12,7 @@
 		{% include header.html %}
 		{%- endfilter %}
 		<main>
-			{%- for post in page.posts.list %}
+			{%- for post in page.collection %}
 			<div class="post">
 				<div class="post-title">{{ post.title }}</div>
 				<div class="date">{{ post.date }}</div>
