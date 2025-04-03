@@ -23,5 +23,13 @@
 			</div>
 			{%- endfor %}
 		</main>
+		{%- if page.collection.total_pages > 1 %}
+		<ul>
+			{% if page.collection.start %}<li><a href="{{ page.collection.start.path }}">Start</a></li>{% endif %}
+			{% if page.collection.previous %}<li><a href="{{ page.collection.previous.path }}">Previous</a></li>{% endif %}
+			{% if page.collection.next %}<li><a href="{{ page.collection.next.path }}">Next</a></li>{% endif %}
+			{% if page.collection.end %}<li><a href="{{ page.collection.end.path }}">End</a></li>{% endif %}
+		</ul>
+		{%- endif %}
 	</body>
 </html>

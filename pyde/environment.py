@@ -202,7 +202,7 @@ class Environment:
 
     def iter_pages(
         self,
-        collection: str,
+        collection_name: str,
         posts: list[SiteFile],
         *,
         page_permalink: str = '',
@@ -226,9 +226,12 @@ class Environment:
             total_pages = 1
             paginations = iter([posts])
         permalink = '/'.join(page_permalink.split('/')[:-1]) + f'/{landing}.html'
-        previous = None
+        pages: list[SiteFile] = []
         for idx, page_posts in enumerate(paginations):
-            title = f'{collection.title()} Page {idx}' if idx else collection.title()
+            title = (
+                f'{collection_name.title()} Page {idx}' if idx
+                else collection_name.title()
+            )
             source = VirtualPath(self.config.posts.source / 'page.html')
             values = self.global_defaults.new_child(
                 self.get_default_values(source)
@@ -237,18 +240,27 @@ class Environment:
                 'permalink': permalink,
                 'num': idx,
                 'collection': Collection(
-                    collection, page_posts, total_posts=len(posts),
+                    collection_name, page_posts, total_posts=len(posts),
                     total_pages=total_pages,
-                    previous=None, next=None,
                 ),
             }).new_child(overrides)
             template_name = f'{self.config.paginate.template}.html'
             page = self.make_virtual_page(source, template_name, values)
-            if previous:
-                previous.posts.next = page.metadata
-            previous = page.metadata
             permalink = page_permalink
-            yield page
+            pages.append(page)
+
+        if self.config.paginate:
+            for idx, collection in enumerate(
+                page.metadata.collection for page in pages
+            ):
+                if idx not in (0, 1):
+                    collection.previous = pages[idx - 1].metadata
+                if idx != len(pages) - 1:
+                    collection.next = pages[max(2, idx + 1)].metadata
+                if len(pages) > 1:
+                    collection.start = pages[1].metadata
+                    collection.end = pages[-1].metadata
+        return pages
 
     def get_default_values(self, source: FilePath) -> dict[str, Any]:
         values = {}
@@ -449,7 +461,7 @@ class Collection:
         return self[attr]
 
     def __getitem__(self, key: str) -> Any:
-        return self._metadata[key]
+        return self._metadata.get(key, Data(_from=f'{self!r}.{key}'))
 
     def __str__(self) -> str:
         return self.name
