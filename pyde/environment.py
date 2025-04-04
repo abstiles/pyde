@@ -158,9 +158,8 @@ class Environment:
                 collections.setdefault(site_file.metadata.collection, []).append(
                     site_file
                 )
-            page_tags = tf.metadata.get('tags') or []
-            for tag in page_tags:
-                tags.setdefault(tag, []).append(site_file)
+                for tag in (tf.metadata.get('tags') or []):
+                    tags.setdefault(tag, []).append(site_file)
             yield site_file
 
         yield from self.collection_meta_pages(collections)
@@ -189,7 +188,8 @@ class Environment:
             yield from self.iter_pages(
                 tag, pages, landing=slugify(tag),
                 page_permalink=self.config.tags.permalink,
-                tag=tag,
+                tag=tag, layout=self.config.tags.template,
+                force_single_page=True,
             )
 
     def collection_meta_pages(
@@ -198,6 +198,7 @@ class Environment:
         for collection, posts in collections.items():
             if len(posts) / self.config.paginate.size <= 1:
                 continue
+            posts.sort(key=lambda p: p.metadata.date, reverse=True)
             yield from self.iter_pages(collection, posts)
 
     def iter_pages(
@@ -206,12 +207,13 @@ class Environment:
         posts: list[SiteFile],
         *,
         page_permalink: str = '',
+        layout: str = '',
         landing: str = 'index',
+        force_single_page: bool = False,
         **overrides: Any,
     ) -> Iterable[SiteFile]:
         page_permalink = page_permalink or self.config.paginate.permalink
-        posts.sort(key=lambda p: p.metadata.date, reverse=True)
-        if self.config.paginate:
+        if self.config.paginate and not force_single_page:
             paginate_size = self.config.paginate.size
             total_pages = ceil(len(posts) / self.config.paginate.size)
             paginations = iter(batched(posts, paginate_size))
@@ -225,7 +227,7 @@ class Environment:
             paginate_size = 0
             total_pages = 1
             paginations = iter([posts])
-        permalink = '/'.join(page_permalink.split('/')[:-1]) + f'/{landing}.html'
+        permalink = '/'.join(page_permalink.split('/')[:-1]) + f'/{landing}'
         pages: list[SiteFile] = []
         for idx, page_posts in enumerate(paginations):
             title = (
@@ -244,7 +246,7 @@ class Environment:
                     total_pages=total_pages,
                 ),
             }).new_child(overrides)
-            template_name = f'{self.config.paginate.template}.html'
+            template_name = f'{layout or self.config.paginate.template}.html'
             page = self.make_virtual_page(source, template_name, values)
             permalink = page_permalink
             pages.append(page)

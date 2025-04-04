@@ -52,9 +52,6 @@ class ParsedUrl(NamedTuple):
 class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
     """Represents a URL"""
 
-    url_tuple: ParsedUrl
-    _path: PurePosixPath
-
     @classmethod
     def _parse_url(
         cls,
@@ -67,9 +64,16 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
             case PathLike(): return ParsedUrl.parse(url, quote=quote)
             case _: return ParsedUrl.parse(str(url), quote=quote)
 
-    def __init__(self, url: PathType | ParsedUrl='', *, quote: bool=True):
+    def __init__(
+        self,
+        url: PathType | ParsedUrl='',
+        *,
+        quote: bool=True,
+        abbreviate: bool=True
+    ):
         self.url_tuple = self._parse_url(url, quote)
         self._path = PurePosixPath(self.url_tuple.path)
+        self._abbreviate = abbreviate
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, UrlPath):
@@ -80,6 +84,8 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
         return hash(self.url_tuple)
 
     def __str__(self) -> str:
+        if self._abbreviate and self.stem == 'index':
+            return str(self.parent.url_tuple)
         return str(self.url_tuple)
 
     def encoded(self) -> UrlQuoted:
@@ -147,12 +153,6 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
     @property
     def path(self) -> UrlQuoted:
         return self.url_tuple.path or '/'
-
-    @property
-    def deindexed(self) -> UrlPath:
-        if self.stem == 'index':
-            return self.parent
-        return self
 
     @property
     def dir(self) -> UrlPath:

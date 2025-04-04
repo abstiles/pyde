@@ -1,5 +1,5 @@
 import shutil
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -15,17 +15,6 @@ TEST_DATA_DIR = Path(__file__).parent / 'test_data'
 IN_DIR = Path('input')
 OUT_DIR = TEST_DATA_DIR / 'output'
 EXPECTED_DIR = TEST_DATA_DIR / 'expected'
-
-
-@pytest.fixture(autouse=True)
-def output_dir() -> Iterable[Path]:
-    OUT_DIR.mkdir(exist_ok=True)
-    yield OUT_DIR
-    for child in OUT_DIR.iterdir():
-        if child.is_dir():
-            shutil.rmtree(child, ignore_errors=True)
-        else:
-            child.unlink(missing_ok=True)
 
 
 def get_config(**kwargs: Any) -> Config:
@@ -45,7 +34,7 @@ def get_config(**kwargs: Any) -> Config:
                 },
             ],
             'tags': 'tag',
-            'paginate': {'template': 'tag', 'size': 2},
+            'paginate': {'template': 'postindex', 'size': 2},
             **kwargs,
         }
     )
@@ -60,6 +49,7 @@ LAYOUT_FILES = {
     '_layouts/post.html',
     '_layouts/default.html',
     '_layouts/tag.html',
+    '_layouts/postindex.html',
 }
 INCLUDE_FILES = {'_includes/header.html'}
 DRAFT_FILES = {'_drafts/unfinished_post.md'}
@@ -96,52 +86,84 @@ POST_OUTPUTS = {
 OUTPUT_FILES = RAW_OUTPUTS | PAGE_OUTPUTS | POST_OUTPUTS | META_OUTPUTS
 DRAFT_OUTPUT_FILES = OUTPUT_FILES | DRAFT_OUTPUTS
 
-def test_environment_source_files() -> None:
-    env = get_env()
-    assert set(map(str, env.source_files())) == SOURCE_FILES
 
-def test_environment_layout_files() -> None:
-    env = get_env()
-    assert set(map(str, env.layout_files())) == LAYOUT_FILES
+def make_output_dir() -> None:
+    OUT_DIR.mkdir(exist_ok=True)
 
-def test_environment_include_files() -> None:
-    env = get_env()
-    assert set(map(str, env.include_files())) == INCLUDE_FILES
 
-def test_environment_draft_files() -> None:
-    env = get_env()
-    assert set(map(str, env.draft_files())) == DRAFT_FILES
+def clean_output_dir() -> None:
+    for child in OUT_DIR.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
 
-def test_environment_output_files() -> None:
-    env = get_env()
-    assert set(map(str, env.output_files())) == OUTPUT_FILES
 
-def test_environment_output_drafts() -> None:
-    env = get_env(drafts=True)
-    assert set(map(str, env.output_files())) == DRAFT_OUTPUT_FILES
+class TestFileSets:
+    @pytest.fixture(autouse=True)
+    def output_dir(self) -> Iterable[Path]:
+        make_output_dir()
+        yield OUT_DIR
+        clean_output_dir()
 
-def test_build() -> None:
-    env = get_env(drafts=True)
-    env.build()
-    print('Output:', '\n'.join(map(str, OUT_DIR.rglob('**/*'))))
-    for file in DRAFT_OUTPUT_FILES:
+    def test_environment_source_files(self) -> None:
+        env = get_env()
+        assert set(map(str, env.source_files())) == SOURCE_FILES
+
+    def test_environment_layout_files(self) -> None:
+        env = get_env()
+        assert set(map(str, env.layout_files())) == LAYOUT_FILES
+
+    def test_environment_include_files(self) -> None:
+        env = get_env()
+        assert set(map(str, env.include_files())) == INCLUDE_FILES
+
+    def test_environment_draft_files(self) -> None:
+        env = get_env()
+        assert set(map(str, env.draft_files())) == DRAFT_FILES
+
+    def test_environment_output_files(self) -> None:
+        env = get_env()
+        assert set(map(str, env.output_files())) == OUTPUT_FILES
+
+    def test_environment_output_drafts(self) -> None:
+        env = get_env(drafts=True)
+        assert set(map(str, env.output_files())) == DRAFT_OUTPUT_FILES
+
+    def test_build_cleanup(self) -> None:
+        dirty_file = OUT_DIR / "inner" / "dirty.txt"
+        dirty_file.parent.mkdir(parents=True, exist_ok=True)
+        dirty_file.write_text("I shouldn't be here!")
+
+        get_env(drafts=True).build()
+
+        assert not dirty_file.exists()
+        for parent in dirty_file.relative_to(OUT_DIR).parents:
+            if parent != Path('.'):
+                assert not (OUT_DIR / parent).exists()
+
+
+class TestBuild:
+    @pytest.fixture(scope="class", autouse=True)
+    def build(self) -> Generator[None, None, None]:
+        make_output_dir()
+        env = get_env(drafts=True)
+        env.build()
+        yield
+        clean_output_dir()
+
+    @parametrize(*DRAFT_OUTPUT_FILES)
+    def test_outputs_exist(self, file: str) -> None:
+        print(f'Files in {OUT_DIR}:', '\n'.join(map(str, OUT_DIR.rglob('**/*'))))
+        output_file = OUT_DIR / file
+        assert output_file.exists(), f'{str(output_file)!r} not found'
+
+    @parametrize(*DRAFT_OUTPUT_FILES)
+    def test_outputs_match_contents(self, file: str) -> None:
         expected = EXPECTED_DIR / file
         actual = OUT_DIR / file
-
-        assert actual.exists(), f'{str(actual)!r} not found'
         assert actual.read_text().rstrip() == expected.read_text().rstrip()
 
-def test_build_cleanup() -> None:
-    dirty_file = OUT_DIR / "inner" / "dirty.txt"
-    dirty_file.parent.mkdir(parents=True, exist_ok=True)
-    dirty_file.write_text("I shouldn't be here!")
-
-    get_env(drafts=True).build()
-
-    assert not dirty_file.exists()
-    for parent in dirty_file.relative_to(OUT_DIR).parents:
-        if parent != Path('.'):
-            assert not (OUT_DIR / parent).exists()
 
 @parametrize(
     ['raw', RAW_OUTPUTS],

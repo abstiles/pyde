@@ -509,7 +509,7 @@ class CopyTransformer(BaseTransformer):
                 if not result.endswith(path.suffix):
                     result += path.suffix
                 return LocalPath(result).relative_to('/')
-            return UrlPath(result).absolute().deindexed
+            return UrlPath(result).absolute()
         except KeyError as exc:
             raise ValueError(
                 f'Cannot create filename from metadata element {exc}'

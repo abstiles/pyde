@@ -9,6 +9,7 @@ T_co = TypeVar('T_co', covariant=True)
 
 class Wrapped(Protocol,Generic[T_co]):
     def __call__(self, *args: Any, **kwargs: Any) -> T_co: ...
+    __qualname__: str
 
 class Proxy(Protocol, Generic[T_co]):
     def __getattr__(self, key: Any) -> Any: ...
@@ -28,7 +29,11 @@ def parametrize(
 ) -> Callable[[Wrapped[T]], Wrapped[T]]:
     def decorator(func: Wrapped[T]) -> Wrapped[T]:
         params: Sequence[str]
-        test_params = inspect.signature(func).parameters
+        test_params = dict(inspect.signature(func).parameters)
+        if '.' in func.__qualname__:
+            # Looks like a method, so ignore the first "self" arg.
+            self = next(iter(test_params))
+            test_params.pop(self)
         if args is None:
             params = [name for (name, p) in test_params.items()
                       if p.annotation is not NoParam]
