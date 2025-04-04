@@ -69,7 +69,7 @@ class WriteablePath(ReadablePath, Protocol):
     def __rtruediv__(self, key: Path | PydePath) -> WriteablePath: ...
 
 
-class _LocalPath(WriteablePath, os.PathLike[str]):
+class LocalPath(WriteablePath, os.PathLike[str]):
     """
     Model a path that exists on the local filesystem
     """
@@ -195,12 +195,11 @@ class _LocalPath(WriteablePath, os.PathLike[str]):
         return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
-LocalPath = _LocalPath  # pyright: ignore
-LocalPath.__name__ = 'LocalPath'
 if TYPE_CHECKING:
     # Because the type checkers don't provide a nice way to declare that
     # LocalPath proxies its Path instance with getattr, let's create the
     # polite fiction that it inherits from Path.
-    class LocalPath(_LocalPath, Path):  # type: ignore # pylint: disable=all
+    class _LocalPath(LocalPath, Path):  # type: ignore # pylint: disable=all
         def __new__(cls, path: Path | PydePath) -> Self: ...
         def __init__(self, path: Path | PydePath): ...
+    LocalPath = _LocalPath  # type: ignore

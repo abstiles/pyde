@@ -27,19 +27,16 @@ class VirtualPath(WriteablePath):
         )
         self._timestamp = datetime.now()
 
-    @property
-    def _content_str(self) -> str:
-        as_str = self._content.decode('utf8', errors='backslashreplace')
-        return textwrap.shorten(as_str, width=100)
-
     def __str__(self) -> str:
         return str(self._path)
 
     def __repr__(self) -> str:
+        as_str = self._content.decode('utf8', errors='backslashreplace')
+        abbreviated = textwrap.shorten(as_str, width=100)
         return (
             f'{type(self).__name__}('
             f'{str(self._path)!r}'
-            f', content={self._content_str!r}'
+            f', content={abbreviated!r}'
             ')'
         )
 

@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from pyde.utils import Predicate, bucketize, dict_to_dataclass, iter_buckets, seq_pivot
+from pyde.utils import Maybe, Predicate, bucketize, dict_to_dataclass, iter_buckets, seq_pivot
 
 
 @dataclass
@@ -123,7 +123,3 @@ def test_iter_buckets() -> None:
     assert calls['two'] == 4
     assert calls['three'] == 2
     assert calls['four'] == 0
-
-
-def test_deep_chain_map():
-    pass

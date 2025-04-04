@@ -57,9 +57,3 @@ class BlockQuoteExtension(Extension):
             BlockQuoteProcessor(md.parser), 'quote', 70
         )
         md.registerExtension(self)
-
-
-def makeExtension(*args, **kwargs):
-    """Return extension."""
-
-    return BlockQuoteExtension(*args, **kwargs)

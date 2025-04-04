@@ -2,38 +2,20 @@
 Handle config file parsing
 """
 from dataclasses import InitVar, dataclass, field
-from functools import partial
-from glob import glob
 from os import PathLike
-from os.path import isdir
 from pathlib import Path
-from typing import Any, ClassVar, Iterable, Literal
+from typing import Any, ClassVar, Literal
 
 import yaml
 
-from .path import UrlPath, FilePath
-from .utils import dict_to_dataclass, flatmap
+from .path import FilePath, UrlPath
+from .utils import dict_to_dataclass
 
 PathType = str | PathLike[str]
 
 ReadErrorType = Literal[
     'strict', 'ignore', 'replace', 'surrogateescape', 'backslashreplace'
 ]
-
-@dataclass
-class SourceFile:
-    """A source file with additional metadata attached"""
-    path: Path
-    root: Path
-    values: dict[str, str]
-
-    def read_text(
-        self, encoding: str='utf8', errors: ReadErrorType | None=None,
-    ) -> str:
-        return self.path.read_text(encoding=encoding, errors=errors)
-
-    def read_bytes(self) -> bytes:
-        return self.path.read_bytes()
 
 
 @dataclass(frozen=True)
@@ -131,43 +113,9 @@ class Config:
             ),
         ])
 
-    def iter_files(self) -> Iterable[SourceFile]:
-        """Iterate through all files included in the build"""
-        globber = partial(iterglob, root=self.root)
-        exclude_patterns = set(map(str, [
-            self.output_dir, self.layouts_dir, self.includes_dir,
-            *([self.config_file] if self.config_file else []),
-            *self.exclude
-        ]))
-        if not self.drafts:
-            exclude_patterns.add('_drafts')
-        excluded = set(flatmap(globber, exclude_patterns))
-        excluded_dirs = set(f for f in excluded if isdir(f))
-        included = set(flatmap(globber, set(['**', *self.include])))
-        paths = map(Path, included - excluded)
-        files = filter(Path.is_file, paths)
-        return (
-            self.source_file(file) for file in files
-            if not excluded_dirs.intersection(map(str, file.parents))
-        )
-
     @classmethod
     def parse(cls, file: Path) -> 'Config':
         """Parse the given config file"""
         with file.open() as f:
             config_data: dict[str, Any] = yaml.safe_load(f)
         return dict_to_dataclass(cls, {'config_file': file, **config_data})
-
-    def source_file(self, path: Path) -> SourceFile:
-        """Attach metadata for file given scope defaults"""
-        values: dict[str, str] = {"permalink": self.permalink, "layout": "default"}
-        for default in self.defaults:
-            if default.scope.matches(path.relative_to(self.root)):
-                values.update(default.values)
-        return SourceFile(path=path, root=self.root, values=values)
-
-
-def iterglob(pattern: str, root: PathType='.') -> Iterable[str]:
-    root = Path(root)
-    for path in glob(pattern, root_dir=root, recursive=True):
-        yield str(root / path)

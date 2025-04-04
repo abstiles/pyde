@@ -85,11 +85,11 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
 
     def __str__(self) -> str:
         if self._abbreviate and self.stem == 'index':
-            return str(self.parent.url_tuple)
-        return str(self.url_tuple)
+            return str(self.parent)
+        return self.encoded()
 
     def encoded(self) -> UrlQuoted:
-        return UrlStr(str(self))
+        return self.url_tuple.geturl()
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}('{self}')"

@@ -2,3 +2,4 @@
 *.egg-info
 /_*
 **/test_data/output
+.coverage

@@ -71,7 +71,6 @@ class TemplateManager:
         self.env.filters['debug'] = debug
         self.env.filters['limit'] = limit
         self.env.filters['last'] = last
-        self.env.filters['namespace_to_dict'] = namespace_to_dict
         self.env.filters['plus'] = plus
         self.env.filters['minus'] = minus
         self.env.filters['divided_by'] = lambda x, y: (x + (y//2)) // y
@@ -83,33 +82,8 @@ class TemplateManager:
     def globals(self) -> dict[str, Any]:
         return self.env.globals
 
-    @classmethod
-    def from_config(cls, config: Config) -> 'TemplateManager':
-        pyde = Data(
-            drafts=config.drafts,
-            environment="development" if config.drafts else "production"
-        )
-        return cls(config.url, config.includes_dir, config.layouts_dir, pyde)
-
     def get_template(self, template: str | Path, **globals: Any) -> Template:
         return self.env.get_template(str(template), globals=globals)
-
-    def apply(self, template: str, data: dict[str, object]) -> str:
-        try:
-            return self.get_template(template).render(data)
-        except jinja2.exceptions.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Invalid template syntax at {exc.filename}:{exc.lineno}",
-                str(exc), exc.source,
-            ) from exc
-        except jinja2.exceptions.TemplateError as exc:
-            if isinstance(exc.__cause__, jinja2.exceptions.TemplateSyntaxError):
-                orig = exc.__cause__
-                raise TemplateError(
-                    f"Invalid template syntax at {orig.filename}:{orig.lineno}",
-                    str(orig), orig.source
-                ) from exc
-            raise TemplateError("Template error", exc.message) from exc
 
     def render(self, source: str, data: dict[str, object]) -> str:
         try:
@@ -479,33 +453,11 @@ def get_date(dt: str | date_only | datetime) -> AutoDate:
         return AutoDate(str(dt))
 
 
-def to_date_or_datetime(dt: str | date_only | datetime) -> datetime | date_only:
-    if dt == 'now':
-        return datetime.now(timezone.utc)
-    if isinstance(dt, str):
-        try:
-            return date_only.fromisoformat(dt)
-        except ValueError:
-            return datetime.fromisoformat(str(dt))
-    return dt
-
-
-def autofmt_date(dt: datetime | date_only) -> str:
-    if not isinstance(dt, (datetime, date_only)):
-        return cast(str, dt)
-    datefmt, timefmt = '%Y-%m-%d', '%H:%M:%S %z'
-    if isinstance(dt, datetime):
-        return dt.strftime(datefmt + timefmt)
-    return dt.strftime(datefmt)
-
-
 def date(dt: str | datetime | date_only, fmt: str='auto') -> str:
     try:
         if fmt == 'auto':
             return str(get_date(dt))
-            #return autofmt_date(to_date_or_datetime(dt))
         return get_date(dt).datetime.strftime(fmt)
-        #return dt.datetime.strftime(fmt)
     except TypeError:
         return cast(str, dt)
 
@@ -624,10 +576,6 @@ def last(environment: Environment, it: Iterable[T]) -> T | Undefined:
         return ilast(it)
     except ValueError:
         return environment.undefined('No last item, iterable was empty')
-
-
-def namespace_to_dict(ns: Namespace) -> dict[str, Any]:
-    return dict(ns.items())
 
 
 def plus(x: int | Undefined, y: int | Undefined) -> int | Undefined:

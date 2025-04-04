@@ -81,6 +81,10 @@ class Environment:
         )
 
     @property
+    def globals(self) -> Mapping[str, Any]:
+        return self.template_manager.globals
+
+    @property
     def site(self) -> SiteFileManager:
         transform_processor = FileProcessor(self.transforms())
         return self._site.load(transform_processor)
@@ -330,12 +334,12 @@ class SiteFile:
     @classmethod
     def classify(cls, tf: Transformer) -> Self:
         if isinstance(tf, CopyTransformer):
-            return cls(tf, 'raw')
+            return cls.raw(tf)
         if type := tf.metadata.get('type'):
             return cls(tf, type)
         if tf.source.suffix in ('.md', '.html'):
-            return cls(tf, 'page')
-        return cls(tf, 'raw')
+            return cls.page(tf)
+        return cls.raw(tf)
 
     def render(self) -> WriteablePath:
         return self.tf.transform()
@@ -391,16 +395,6 @@ class SiteFileManager(Iterable[SiteFile]):
             tag: [post.metadata for post in posts]
             for tag, posts in self._tags.items()
         }
-
-    @classmethod
-    def site_file(cls, tf: Transformer) -> SiteFile:
-        if isinstance(tf, CopyTransformer):
-            return SiteFile(tf, 'raw')
-        if type := tf.metadata.get('type'):
-            return SiteFile(tf, type)
-        if tf.source.suffix in ('.md', '.html'):
-            return SiteFile(tf, 'page')
-        return SiteFile(tf, 'raw')
 
     def load(self, site_files: FileProcessor) -> Self:
         if self._loaded:
@@ -479,15 +473,20 @@ def _not_none(item: T | None) -> TypeGuard[T]:
     return item is not None
 
 
-def _not_dotfile(item: Path) -> bool:
-    return not item.name.startswith('.')
+def _is_dotfile(filename: str) -> bool:
+    return filename.startswith('.')
+
+
+def _not_hidden(path_str: str) -> bool:
+    return not any(map(_is_dotfile, Path(path_str).parts))
 
 
 def iterglob(
     pattern: str | PathLike[str], root: LocalPath=LocalPath('.'),
 ) -> Iterable[LocalPath]:
-    for path in glob(str(pattern), root_dir=root, recursive=True):
-        yield root / path
+    all_matching = glob(str(pattern), root_dir=root, recursive=True)
+    for path in filter(_not_hidden, all_matching):
+        yield root / str(path)
 
 
 F = TypeVar('F', bound=FilePath)

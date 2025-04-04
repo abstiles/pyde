@@ -4,12 +4,13 @@ import os
 import re
 import shutil
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
     AnyStr,
+    Callable,
     ClassVar,
     Literal,
     Protocol,
@@ -21,6 +22,7 @@ from typing import (
 
 from jinja2 import Template
 from markupsafe import Markup
+from typing_extensions import Concatenate
 
 from .data import AutoDate, Data
 from .markdown import markdownify
@@ -30,9 +32,9 @@ from .path import (
     FilePath,
     LocalPath,
     ReadablePath,
-    WriteablePath,
     UrlPath,
     VirtualPath,
+    WriteablePath,
     dest,
     source,
 )
@@ -43,9 +45,13 @@ TO_FORMAT_STR_RE = re.compile(r':(\w+)')
 DEFAULT_PERMALINK = '/:path/:name'
 UNSET: Any = object()
 
+TransformerMatcher = Callable[Concatenate[FilePath, ...], bool]
+
 
 class TransformerType(Protocol):
     def __init__(self, src_path: ReadablePath, /, **kwargs: Any): ...
+
+    __matcher: TransformerMatcher = lambda *a, **kw: False
 
     @property
     def outputs(self) -> WriteablePath: ...
@@ -78,7 +84,7 @@ class TransformerType(Protocol):
 @dataclass(frozen=True)
 class TransformerRegistration:
     transformer: Type[TransformerType]
-    wants: Callable[[FilePath], bool]
+    wants: TransformerMatcher
 
 
 class Transformer(TransformerType):
@@ -97,36 +103,31 @@ class Transformer(TransformerType):
         metaprocessor: MetaProcessor | None=None,
         **meta: Any,
     ) -> Transformer:
-        _ = meta
         src_path = source(src_path)
+        kwargs = {
+            'parse_frontmatter': parse_frontmatter,
+            'permalink': permalink,
+            'template': template,
+            'metaprocessor': metaprocessor,
+            **meta
+        }
         if cls is Transformer:
             transformers: list[type[TransformerType]] = []
-            if parse_frontmatter:
-                transformers.append(MetaTransformer)
-            if metaprocessor:
-                transformers.append(MetaProcessorTransformer)
             for registration in cls.registered:
-                if registration.wants(src_path):
+                if registration.wants(src_path, **kwargs):
                     transformers.append(registration.transformer)
-            if template is not None:
-                transformers.append(TemplateApplyTransformer)
             transformers.append(CopyTransformer)
             if len(transformers) > 1:
                 return PipelineTransformer.build(
-                    src_path, permalink=permalink, template=template,
-                    transformers=transformers, metaprocessor=metaprocessor,
-                    **meta,
+                    src_path, transformers=transformers, **kwargs
                 )
             # If there's only one, it's the obligatory CopyTransformer.
             cls = cast(type[CopyTransformer], transformers[0])
         return super().__new__(cls)  # pyright: ignore
 
-    def __init_subclass__(cls, /, pattern: str='', **kwargs: Any):
+    def __init_subclass__(cls, /, pattern: str | None=None, **kwargs: Any):
         super().__init_subclass__(**kwargs)
-        if pattern:
-            Transformer.register(cls, Transformer._pattern_matcher(pattern))
-        elif matcher := getattr(cls, f'__{cls.__name__}_match_path', None):
-            Transformer.register(cls, matcher)
+        Transformer.register(cls, pattern)
 
     def __init__(self, src_path: AnySource, /, **kwargs: Any):
         self._source = source(src_path)
@@ -146,18 +147,29 @@ class Transformer(TransformerType):
         )
 
     @staticmethod
-    def _pattern_matcher(pattern: str) -> Callable[[FilePath], bool]:
-        def matcher(path: FilePath) -> bool:
-            return path.match(pattern)
+    def _pattern_matcher(pattern: str) -> TransformerMatcher:
+        def matcher(src_path: FilePath, /, **_kwargs: Any) -> bool:
+            return src_path.match(pattern)
         return matcher
 
     @classmethod
     def register(
-        cls,
-        transformer: Type[Transformer],
-        wants: Callable[[FilePath], bool],
+        cls, transformer: Type[Transformer],
+        /, matcher: TransformerMatcher | str | None=None,
+        *, index: int | None=None,
     ) -> Type[Self]:
-        cls.registered.append(TransformerRegistration(transformer, wants))
+        if callable(matcher):
+            matcher_func = matcher
+        elif isinstance(matcher, str):
+            matcher_func = cls._pattern_matcher(matcher)
+        elif matcher_classmethod := getattr(
+            transformer, f'_{transformer.__name__}__matcher', None,
+        ):
+            matcher_func = matcher_classmethod
+        else:
+            return cls
+        index = len(cls.registered) if index is None else index
+        cls.registered.insert(index, TransformerRegistration(transformer, matcher_func))
         return cls
 
     # Phony implementations of the TransformerType protocol just to convince
@@ -533,46 +545,6 @@ class TextTransformer(BaseTransformer, ABC):
     def transform_text(self, text: str) -> str: ...
 
 
-class MarkdownTransformer(TextTransformer, pattern='*.md'):
-    """Transform markdown to HTML"""
-    PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)
-
-    def transformed_name(self) -> str:
-        return str(self.source.with_suffix('.html').name)
-
-    def transform_text(self, text: str) -> str:
-        html = markdownify(text)
-        page = self.metadata
-        try:
-            page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
-            page['word_count'] = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
-        except (TypeError, IndexError):
-            page['excerpt'] = ''
-            page['word_count'] = 0
-        return html
-
-
-class TemplateApplyTransformer(TextTransformer):
-    """Apply a Jinja2 Template to a text file"""
-
-    def __init__(self, src_path: AnySource, /, *, template: Template, **meta: Any):
-        super().__init__(src_path, **meta)
-        self._template = template
-
-    def __repr__(self) -> str:
-        return (
-            f'{self.__class__.__name__}('
-            f'{str(self.source)!r}, {self._template!r}, **{self.metadata})'
-        )
-
-    def transform_text(self, text: str) -> str:
-        results = self._template.render(
-            content=text,
-            page=Data(self.metadata | {'content': text}),
-        )
-        return results
-
-
 class MetaProcessor(Protocol):
     def __call__(
         self,
@@ -583,8 +555,10 @@ class MetaProcessor(Protocol):
 
 class MetaTransformer(TextTransformer):
     @classmethod
-    def __match_path(cls, path: FilePath) -> bool:  # pylint: disable=unused-private-member
-        return bool(path)
+    def __matcher(  # pylint: disable=unused-private-member
+        cls, *_: Any, parse_frontmatter: bool=True, **__: Any
+    ) -> bool:
+        return parse_frontmatter
 
     def __init__(
         self, src_path: AnySource, /,
@@ -621,8 +595,10 @@ class MetaTransformer(TextTransformer):
 
 class MetaProcessorTransformer(TextTransformer):
     @classmethod
-    def __match_path(cls, path: FilePath) -> bool:  # pylint: disable=unused-private-member
-        return bool(path)
+    def __matcher(  # pylint: disable=unused-private-member
+        cls, *_: Any, metaprocessor: MetaProcessor | None=None, **__: Any
+    ) -> bool:
+        return metaprocessor is not None
 
     def __init__(
         self, src_path: AnySource, /,
@@ -634,3 +610,49 @@ class MetaProcessorTransformer(TextTransformer):
 
     def transform_text(self, text: str) -> str:
         return self._processor(text, **self.metadata)
+
+
+class MarkdownTransformer(TextTransformer, pattern='*.md'):
+    """Transform markdown to HTML"""
+    PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)
+
+    def transformed_name(self) -> str:
+        return str(self.source.with_suffix('.html').name)
+
+    def transform_text(self, text: str) -> str:
+        html = markdownify(text)
+        page = self.metadata
+        try:
+            page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
+            page['word_count'] = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
+        except (TypeError, IndexError):
+            page['excerpt'] = ''
+            page['word_count'] = 0
+        return html
+
+
+class TemplateApplyTransformer(TextTransformer):
+    """Apply a Jinja2 Template to a text file"""
+
+    @classmethod
+    def __matcher(  # pylint: disable=unused-private-member
+        cls, *_: Any, template: Template | None=None, **__: Any
+    ) -> bool:
+        return template is not None
+
+    def __init__(self, src_path: AnySource, /, *, template: Template, **meta: Any):
+        super().__init__(src_path, **meta)
+        self._template = template
+
+    def __repr__(self) -> str:
+        return (
+            f'{self.__class__.__name__}('
+            f'{str(self.source)!r}, {self._template!r}, **{self.metadata})'
+        )
+
+    def transform_text(self, text: str) -> str:
+        results = self._template.render(
+            content=text,
+            page=Data(self.metadata | {'content': text}),
+        )
+        return results
