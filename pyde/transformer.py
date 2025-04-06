@@ -283,17 +283,8 @@ class BaseTransformer(Transformer):
         output = self.dest_root / self.outputs
         return self.transform_file(input, output)
 
-    def has_preprocessed(
-        self,
-        path: AnySource | None = None,
-        src_root: AnySource | None = None,
-        dest_root: AnyDest | None = None,
-    ) -> bool:
-        if path is None or src_root is None or dest_root is None:
-            return (path, self._src_root, self._dest_root) != (None, None, None)
-        return (path, self._src_root, self._dest_root) == (
-            source(path), source(src_root), dest(dest_root)
-        )
+    def has_preprocessed(self) -> bool:
+        return (self._src_root, self._dest_root) != (None, None)
 
 
 class PipelineTransformer(BaseTransformer):
@@ -311,7 +302,7 @@ class PipelineTransformer(BaseTransformer):
     def preprocess(
         self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
     ) -> Self:
-        if self.has_preprocessed(path, src_root, dest_root):
+        if self.has_preprocessed():
             return self
         super().preprocess(path, src_root, dest_root)
         metadata: dict[str, Any] = self.metadata
@@ -477,7 +468,7 @@ class CopyTransformer(BaseTransformer):
     def preprocess(
         self, path: AnySource, src_root: AnySource='.', dest_root: AnyDest='.'
     ) -> Self:
-        if not self.has_preprocessed(path, src_root, dest_root):
+        if not self.has_preprocessed():
             super().preprocess(path, src_root, dest_root)
             self._generate_path_info()
         return self
@@ -623,6 +614,8 @@ class MarkdownTransformer(TextTransformer, pattern='*.md'):
         html = markdownify(text)
         page = self.metadata
         try:
+            if page.get('description'):
+                page['description'] = markdownify(page['description'])
             page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
             page['word_count'] = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
         except (TypeError, IndexError):

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import TypeAlias, TypeVar, overload
+from functools import lru_cache
 
 from .filepath import (  # type: ignore
     FilePath,
@@ -23,6 +24,7 @@ _RW = TypeVar('_RW', bound=WriteablePath)
 def source(path: _R) -> _R: ...
 @overload
 def source(path: str | Path) -> LocalPath: ...
+@lru_cache
 def source(path: AnySource) -> ReadablePath:
     """Converts source paths to their correct type"""
     if isinstance(path, Path):
@@ -36,6 +38,7 @@ def source(path: AnySource) -> ReadablePath:
 def dest(path: _RW) -> _RW: ...
 @overload
 def dest(path: str | Path) -> LocalPath: ...
+@lru_cache
 def dest(path: AnyDest) -> WriteablePath:
     """Converts destination paths to their correct type"""
     if isinstance(path, Path):

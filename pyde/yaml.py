@@ -5,6 +5,10 @@ from datetime import date, datetime, timezone
 from typing import TypeAlias, cast
 
 import yaml
+try:
+    from yaml import CSafeLoader as Loader
+except ImportError:
+    from yaml import CSafeLoader as Loader
 
 
 YamlType: TypeAlias = (
@@ -87,7 +91,7 @@ class AutoDate:
 
 
 def parse_yaml_dict(yaml_str: str) -> Mapping[str, YamlType | AutoDate]:
-    yaml_dict = yaml.safe_load(yaml_str)
+    yaml_dict = yaml.load(yaml_str, Loader=Loader)
     if not isinstance(yaml_dict, Mapping):
         return {}
     return _transform_types(cast(dict[str, YamlType], yaml_dict))

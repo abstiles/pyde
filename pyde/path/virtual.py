@@ -44,7 +44,7 @@ class VirtualPath(WriteablePath):
         return self.__class__(path, self._content)
 
     def __hash__(self) -> int:
-        return hash(self._path)
+        return hash(self._path) ^ hash(self._content)
 
     def __eq__(self, other: object) -> bool:
         return self._path == other
