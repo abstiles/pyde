@@ -3,41 +3,20 @@ from __future__ import annotations
 import dataclasses
 import re
 import shutil
-from collections.abc import Generator, Mapping, Sequence
 from functools import partial
 from glob import glob
-from itertools import chain, islice
-from math import ceil
+from itertools import islice
 from os import PathLike
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    ChainMap,
-    Iterable,
-    Iterator,
-    Literal,
-    Self,
-    TypeAlias,
-    TypeGuard,
-    TypeVar,
-    overload,
-)
+from typing import Any, Callable, ChainMap, Iterable, TypeGuard, TypeVar, overload
 
 from .config import Config
 from .data import Data
-from .path import UrlPath, FilePath, LocalPath, ReadablePath, WriteablePath
-from .path.virtual import VirtualPath
+from .path import FilePath, LocalPath
+from .site import SiteFileManager
 from .templates import TemplateManager
 from .transformer import CopyTransformer, Transformer
-from .utils import (
-    CaseInsensitiveStr,
-    ReturningGenerator,
-    batched,
-    flatmap,
-    seq_pivot,
-    slugify,
-)
+from .utils import flatmap
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -53,41 +32,62 @@ class Environment:
             **dataclasses.asdict(config)
         )
 
-        exec_dir = LocalPath(config.config_file.parent if config.config_file else '.')
+        self.exec_dir = LocalPath(
+            config.config_file.parent if config.config_file else '.'
+        )
         self.config = config
-        self.exec_dir = exec_dir
-        self.includes_dir = exec_dir / self.config.includes_dir
-        self.layouts_dir = exec_dir / self.config.layouts_dir
-        self.output_dir = exec_dir / self.config.output_dir
-        self.drafts_dir = exec_dir / self.config.drafts_dir
-        self.posts_dir = exec_dir / self.config.posts.source
-        self.root = exec_dir / self.config.root
-        self.global_defaults: ChainMap[str, Any] = ChainMap({
-            "permalink": self.config.permalink,
-            "layout": "default",
-            "metaprocessor": self.render_template,
-            "site_url": self.config.url,
-            "links": [],
-        })
-        self._site = SiteFileManager(self.config.url)
+        self._site = SiteFileManager(self.root, self.output_dir, self.config.url)
+        self._site_loaded = False
         self.template_manager = TemplateManager(
-            exec_dir / self.includes_dir,
-            exec_dir / self.layouts_dir,
+            self.includes_dir,
+            self.layouts_dir,
             globals={
                 'site': self._site,
                 'pyde': pyde,
                 'jekyll': pyde,
             },
         )
+        self.global_defaults: ChainMap[str, Any] = ChainMap({
+            "permalink": config.permalink,
+            "layout": "default",
+            "metaprocessor": self.template_manager.render,
+            "site_url": self.config.url,
+        })
 
     @property
-    def globals(self) -> Mapping[str, Any]:
-        return self.template_manager.globals
+    def includes_dir(self) -> LocalPath:
+        return self.exec_dir / self.config.includes_dir
+
+    @property
+    def layouts_dir(self) -> LocalPath:
+        return self.exec_dir / self.config.layouts_dir
+
+    @property
+    def output_dir(self) -> LocalPath:
+        return self.exec_dir / self.config.output_dir
+
+    @property
+    def drafts_dir(self) -> LocalPath:
+        return self.exec_dir / self.config.drafts_dir
+
+    @property
+    def posts_dir(self) -> LocalPath:
+        return self.exec_dir / self.config.posts.source
+
+    @property
+    def root(self) -> LocalPath:
+        return self.exec_dir / self.config.root
 
     @property
     def site(self) -> SiteFileManager:
-        transform_processor = FileProcessor(self.transforms())
-        return self._site.load(transform_processor)
+        if self._site_loaded:
+            return self._site
+        self._process_sources()
+        self._process_collections()
+        if self.config.tags.enabled:
+            self._process_tags()
+        self._site_loaded = True
+        return self._site.load()
 
     def build(self) -> None:
         self.output_dir.mkdir(exist_ok=True)
@@ -129,145 +129,6 @@ class Environment:
             if file in included or not excluded_dirs.intersection(file.parents)
         }
 
-    def render_template(self, source: str | bytes | Path, **metadata: Any) -> str:
-        if isinstance(source, Path):
-            return self.template_manager.get_template(source).render(metadata)
-        template = source.decode('utf') if isinstance(source, bytes) else source
-        return self.template_manager.render(template, metadata)
-
-    def transforms(self) -> Generator[SiteFile, None, dict[Tag, list[SiteFile]]]:
-        tags: dict[Tag, list[SiteFile]] = {}
-        collections: dict[str, list[SiteFile]] = {}
-        source: ReadablePath
-        for source in map(LocalPath, self.source_files()):
-            if not self.should_transform(source):
-                yield SiteFile(
-                    CopyTransformer(
-                        source, file=source
-                    ).preprocess(source, self.root, self.output_dir),
-                    'raw',
-                )
-                continue
-
-            values = self.global_defaults.new_child(self.get_default_values(source))
-            tf = Transformer(source, **values).preprocess(
-                source, self.root, self.output_dir
-            )
-            layout = tf.metadata.get('layout', values['layout'])
-            template_name = f'{layout}{tf.outputs.suffix}'
-            template = self.template_manager.get_template(template_name)
-
-            site_file = SiteFile.classify(tf.pipe(template=template))
-            if site_file.type == 'post':
-                collections.setdefault(site_file.metadata.collection, []).append(
-                    site_file
-                )
-                for tag in (tf.metadata.get('tags') or []):
-                    tags.setdefault(tag, []).append(site_file)
-            yield site_file
-
-        yield from self.collection_meta_pages(collections)
-
-        if self.config.tags.enabled:
-            yield from self.tag_meta_pages(tags)
-
-        return tags
-
-    def make_virtual_page(
-        self, path: FilePath, layout: str, metadata: Mapping[str, Any],
-    ) -> SiteFile:
-        source = VirtualPath(path)
-        template = self.template_manager.get_template(layout)
-        values = dict(metadata) | {'template': template}
-        tf = Transformer(source, **values).preprocess(
-            source, self.root, self.output_dir
-        )
-        return SiteFile.meta(tf)
-
-    def tag_meta_pages(self, tags: Mapping[Tag, list[SiteFile]]) -> Iterable[SiteFile]:
-        for tag, pages in tags.items():
-            if len(pages) < self.config.tags.minimum:
-                continue
-            pages.sort(key=lambda p: p.metadata.date, reverse=True)
-            yield from self.iter_pages(
-                tag, pages, landing=slugify(tag),
-                page_permalink=self.config.tags.permalink,
-                tag=tag, layout=self.config.tags.template,
-                force_single_page=True,
-            )
-
-    def collection_meta_pages(
-        self, collections: Mapping[str, list[SiteFile]],
-    ) -> Iterable[SiteFile]:
-        for collection, posts in collections.items():
-            if len(posts) / self.config.paginate.size <= 1:
-                continue
-            posts.sort(key=lambda p: p.metadata.date, reverse=True)
-            yield from self.iter_pages(collection, posts)
-
-    def iter_pages(
-        self,
-        collection_name: str,
-        posts: list[SiteFile],
-        *,
-        page_permalink: str = '',
-        layout: str = '',
-        landing: str = 'index',
-        force_single_page: bool = False,
-        **overrides: Any,
-    ) -> Iterable[SiteFile]:
-        page_permalink = page_permalink or self.config.paginate.permalink
-        if self.config.paginate and not force_single_page:
-            paginate_size = self.config.paginate.size
-            total_pages = ceil(len(posts) / self.config.paginate.size)
-            paginations = iter(batched(posts, paginate_size))
-            # Generate the "landing" page as a first page in addition to the
-            # usual "page 1" page, but don't generate two instances of the
-            # first page if there are no other pages.
-            if total_pages > 1:
-                first = [*islice(paginations, 1)] * 2
-                paginations = chain(first, paginations)
-        else:
-            paginate_size = 0
-            total_pages = 1
-            paginations = iter([posts])
-        permalink = '/'.join(page_permalink.split('/')[:-1]) + f'/{landing}'
-        pages: list[SiteFile] = []
-        for idx, page_posts in enumerate(paginations):
-            title = (
-                f'{collection_name.title()} Page {idx}' if idx
-                else collection_name.title()
-            )
-            source = VirtualPath(self.config.posts.source / 'page.html')
-            values = self.global_defaults.new_child(
-                self.get_default_values(source)
-            ).new_child({
-                'title': title,
-                'permalink': permalink,
-                'num': idx,
-                'collection': Collection(
-                    collection_name, page_posts, total_posts=len(posts),
-                    total_pages=total_pages,
-                ),
-            }).new_child(overrides)
-            template_name = f'{layout or self.config.paginate.template}.html'
-            page = self.make_virtual_page(source, template_name, values)
-            permalink = page_permalink
-            pages.append(page)
-
-        if self.config.paginate:
-            for idx, collection in enumerate(
-                page.metadata.collection for page in pages
-            ):
-                if idx not in (0, 1):
-                    collection.previous = pages[idx - 1].metadata
-                if idx != len(pages) - 1:
-                    collection.next = pages[max(2, idx + 1)].metadata
-                if len(pages) > 1:
-                    collection.start = pages[1].metadata
-                    collection.end = pages[-1].metadata
-        return pages
-
     def get_default_values(self, source: FilePath) -> dict[str, Any]:
         values = {}
         for default in self.config.defaults:
@@ -283,9 +144,44 @@ class Environment:
                 return True
         return False
 
+    def _process_sources(self) -> None:
+        for source in map(LocalPath, self.source_files()):
+            if not self.should_transform(source):
+                self._site.append(
+                    CopyTransformer(
+                        source, file=source
+                    ).preprocess(source, self.root, self.output_dir),
+                    'raw',
+                )
+                continue
+
+            values = self.global_defaults.new_child(self.get_default_values(source))
+            tf = Transformer(source, **values).preprocess(
+                source, self.root, self.output_dir
+            )
+            layout = tf.metadata.get('layout', values['layout'])
+            template_name = f'{layout}{tf.outputs.suffix}'
+            template = self.template_manager.get_template(template_name)
+
+            self._site.append(tf.pipe(template=template))
+
+    def _process_collections(self) -> None:
+        pagination = self.config.paginate
+        template = self.template_manager.get_template(f'{pagination.template}.html')
+        self._site.generate_collection_pages(
+            template, pagination.permalink, pagination.size, self.global_defaults,
+        )
+
+    def _process_tags(self) -> None:
+        tag_spec = self.config.tags
+        template = self.template_manager.get_template(f'{tag_spec.template}.html')
+        self._site.generate_tag_pages(
+            template, tag_spec.permalink, tag_spec.minimum, self.global_defaults,
+        )
+
     def output_files(self) -> Iterable[FilePath]:
-        for transform in self.transforms():
-            yield transform.outputs
+        for site_file in self.site:
+            yield site_file.outputs
 
     def _tree(self, dir: LocalPath) -> Iterable[LocalPath]:
         return (
@@ -302,171 +198,6 @@ class Environment:
 
     def draft_files(self) -> Iterable[LocalPath]:
         return self._tree(self.drafts_dir)
-
-
-SiteFileType: TypeAlias = Literal['post', 'page', 'raw', 'meta']
-
-
-class Tag(CaseInsensitiveStr):
-    pass
-
-
-class SiteFile:
-    def __init__(self, tf: Transformer, type: SiteFileType):
-        self.tf, self.type = tf, type
-
-    @classmethod
-    def raw(cls, tf: Transformer) -> Self:
-        return cls(tf, 'raw')
-
-    @classmethod
-    def page(cls, tf: Transformer) -> Self:
-        return cls(tf, 'page')
-
-    @classmethod
-    def post(cls, tf: Transformer) -> Self:
-        return cls(tf, 'post')
-
-    @classmethod
-    def meta(cls, tf: Transformer) -> Self:
-        return cls(tf, 'meta')
-
-    @classmethod
-    def classify(cls, tf: Transformer) -> Self:
-        if isinstance(tf, CopyTransformer):
-            return cls.raw(tf)
-        if type := tf.metadata.get('type'):
-            return cls(tf, type)
-        if tf.source.suffix in ('.md', '.html'):
-            return cls.page(tf)
-        return cls.raw(tf)
-
-    def render(self) -> WriteablePath:
-        return self.tf.transform()
-
-    @property
-    def source(self) -> ReadablePath:
-        return self.tf.source
-
-    @property
-    def outputs(self) -> WriteablePath:
-        return self.tf.outputs
-
-    @property
-    def metadata(self) -> Data:
-        return Data(self.tf.metadata)
-
-    @property
-    def tags(self) -> Iterable[Tag]:
-        return map(Tag, self.metadata.get('tags', ()))
-
-
-class SiteFileManager(Iterable[SiteFile]):
-    def __init__(self, url: UrlPath):
-        self._files: Mapping[SiteFileType, Iterable[SiteFile]] = {}
-        self._loaded = False
-        self.url = url
-        self._tags: TagMap = {}
-
-    def _page_data(self, type: SiteFileType) -> Iterable[Mapping[str, Any]]:
-        return [
-            f.metadata for f in self._files.get(type, ())
-        ]
-
-    @property
-    def pages(self) -> Iterable[Mapping[str, Any]]:
-        return self._page_data('page')
-
-    @property
-    def posts(self) -> Iterable[Mapping[str, Any]]:
-        return self._page_data('post')
-
-    @property
-    def raw(self) -> Iterable[Mapping[str, Any]]:
-        return self._page_data('raw')
-
-    @property
-    def meta(self) -> Iterable[Mapping[str, Any]]:
-        return self._page_data('meta')
-
-    @property
-    def tags(self) -> Mapping[str, list[Data]]:
-        return {
-            tag: [post.metadata for post in posts]
-            for tag, posts in self._tags.items()
-        }
-
-    def load(self, site_files: FileProcessor) -> Self:
-        if self._loaded:
-            return self
-        self._files = seq_pivot(site_files, attr='type')
-        self._tags = site_files.tag_map
-        self._loaded = True
-        return self
-
-    def __iter__(self) -> Iterator[SiteFile]:
-        type_ordering: Iterable[SiteFileType] = ('post', 'page', 'raw', 'meta')
-        for file_type in type_ordering:
-            yield from self._files.get(file_type, ())
-
-
-TagMap: TypeAlias = Mapping[Tag, Sequence[SiteFile]]
-
-class FileProcessor(Iterable[SiteFile]):
-    def __init__(self, tf_generator: Generator[SiteFile, None, TagMap]):
-        self._generator = ReturningGenerator(tf_generator)
-        self._files: list[SiteFile] | None = None
-
-    def _process(self) -> list[SiteFile]:
-        if self._files is None:
-            self._files = list(self._generator)
-        return self._files
-
-    def __iter__(self) -> Iterator[SiteFile]:
-        return iter(self.site_files)
-
-    @property
-    def site_files(self) -> Iterable[SiteFile]:
-        return self._process()
-
-    @property
-    def tag_map(self) -> TagMap:
-        self._process()
-        return self._generator.value
-
-
-class Collection:
-    def __init__(self, name: str, posts: Sequence[SiteFile] = (), **kwargs: Any):
-        self._name = name
-        self._posts = [post.metadata for post in posts]
-        self._metadata = kwargs
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def posts(self) -> Sequence[Data]:
-        return self._posts
-
-    @property
-    def size(self) -> int:
-        return len(self._posts)
-
-    def __getattr__(self, attr: str) -> Any:
-        return self[attr]
-
-    def __getitem__(self, key: str) -> Any:
-        return self._metadata.get(key, Data(_from=f'{self!r}.{key}'))
-
-    def __str__(self) -> str:
-        return self.name
-
-    def __repr__(self) -> str:
-        return f'{type(self).__name__}({self.name!r}, posts[{len(self.posts)}])'
-
-    def __iter__(self) -> Iterator[Data]:
-        return iter(self.posts)
 
 
 def _not_none(item: T | None) -> TypeGuard[T]:

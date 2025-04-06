@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from pyde.utils import Maybe, Predicate, bucketize, dict_to_dataclass, iter_buckets, seq_pivot
+from pyde.utils import Predicate, bucketize, dict_to_dataclass, iter_buckets, seq_pivot
 
 
 @dataclass

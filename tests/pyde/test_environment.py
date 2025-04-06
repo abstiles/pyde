@@ -1,3 +1,4 @@
+import re
 import shutil
 from collections.abc import Generator, Iterable
 from pathlib import Path
@@ -78,13 +79,16 @@ META_OUTPUTS = {
 DRAFT_OUTPUTS = {
     'drafts/WIP.html',
 }
+DRAFT_META_OUTPUTS = {
+    'drafts/index.html',
+}
 POST_OUTPUTS = {
     'posts/post.html',
     'posts/another-post.html',
     'posts/third-post.html',
 }
 OUTPUT_FILES = RAW_OUTPUTS | PAGE_OUTPUTS | POST_OUTPUTS | META_OUTPUTS
-DRAFT_OUTPUT_FILES = OUTPUT_FILES | DRAFT_OUTPUTS
+DRAFT_OUTPUT_FILES = OUTPUT_FILES | DRAFT_OUTPUTS | DRAFT_META_OUTPUTS
 
 
 def make_output_dir() -> None:
@@ -160,16 +164,24 @@ class TestBuild:
 
     @parametrize(*DRAFT_OUTPUT_FILES)
     def test_outputs_match_contents(self, file: str) -> None:
-        expected = EXPECTED_DIR / file
-        actual = OUT_DIR / file
-        assert actual.read_text().rstrip() == expected.read_text().rstrip()
+        actual = (OUT_DIR / file).read_text().rstrip()
+        expected = (EXPECTED_DIR / file).read_text().rstrip()
+        # Drafts shouldn't have a real publish date, so all they'll have is a
+        # date that comes from the filesystem ctime/mtime/birthtime, the
+        # accuracy of which is not an interesting part of the test. Therefore
+        # this test replaces the specific date with Xs.
+        assert re.sub(
+            r'"date">\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \+0000',
+            '"date">XXXX-XX-XX XX:XX:XX +0000',
+            actual,
+        ) == expected
 
 
 @parametrize(
     ['raw', RAW_OUTPUTS],
     ['pages', PAGE_OUTPUTS],
     ['posts', POST_OUTPUTS | DRAFT_OUTPUTS],
-    ['meta', META_OUTPUTS],
+    ['meta', META_OUTPUTS | DRAFT_META_OUTPUTS ],
 )
 def test_site_files(
     type: str, results: set[str]

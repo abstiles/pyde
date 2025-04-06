@@ -6,7 +6,7 @@ from collections import namedtuple
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from contextlib import contextmanager
 from datetime import date as date_only
-from datetime import datetime, timezone
+from datetime import datetime
 from operator import attrgetter, itemgetter
 from pathlib import Path
 from typing import Any, Self, TypeVar, cast, overload
@@ -26,10 +26,9 @@ from jinja2.lexer import Lexer, Token, TokenStream
 from jinja2.runtime import Context, Undefined
 from jinja2.utils import Namespace
 
-from .config import Config
-from .data import AutoDate, Data
+from .data import AutoDate
 from .markdown import markdownify
-from .path import AnyRealPath, UrlPath
+from .path import AnyRealPath, ReadablePath, UrlPath
 from .utils import first as ifirst
 from .utils import last as ilast
 from .utils import prepend, slugify
@@ -82,10 +81,23 @@ class TemplateManager:
     def globals(self) -> dict[str, Any]:
         return self.env.globals
 
-    def get_template(self, template: str | Path, **globals: Any) -> Template:
+    def get_template(self, template: str | ReadablePath, **globals: Any) -> Template:
         return self.env.get_template(str(template), globals=globals)
 
-    def render(self, source: str, data: dict[str, object]) -> str:
+    def render(
+        self, source: str | bytes | ReadablePath, **metadata: Any,
+    ) -> str:
+        if isinstance(source, (str, bytes)):
+            return self.render_string(source, metadata)
+        return self.render_template(source, metadata)
+
+    def render_template(
+        self, source: ReadablePath, data: dict[str, object],
+    ) -> str:
+        return self.get_template(source).render(data)
+
+    def render_string(self, source: str | bytes, data: dict[str, object]) -> str:
+        source = source.decode('utf8') if isinstance(source, bytes) else source
         try:
             return self.env.from_string(source).render(data)
         except jinja2.exceptions.TemplateSyntaxError as exc:
