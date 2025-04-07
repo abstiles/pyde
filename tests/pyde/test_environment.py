@@ -24,6 +24,7 @@ def get_config(**kwargs: Any) -> Config:
         {
             'config_file': TEST_DATA_DIR / IN_DIR / '_config.yml',
             'url': 'https://www.example.com',
+            'include': ['.htaccess'],
             'output_dir': OUT_DIR,
             'permalink': '/:path/:basename',
             'defaults': [
@@ -61,8 +62,10 @@ SOURCE_FILES = {
     '_posts/another-post.md',
     '_posts/third-post.md',
     'styles/base.css',
+    '.htaccess',
 }
 RAW_OUTPUTS = {
+    '.htaccess',
     'js/script.js',
     'styles/base.css',
 }

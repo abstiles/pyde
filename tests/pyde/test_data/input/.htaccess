@@ -1,0 +1,12 @@
+RewriteEngine On
+RewriteBase /
+
+# Rewrite extensionless paths to include .html
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}.html -f
+RewriteRule ^(.*)$ $1.html [L]
+
+# Use index.html for bare directories
+RewriteCond %{DOCUMENT_ROOT}/index.html -f
+RewriteRule ^$ /index.html [L]

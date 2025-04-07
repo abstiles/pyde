@@ -5,7 +5,7 @@ import re
 import shutil
 from functools import partial
 from glob import glob
-from itertools import islice
+from itertools import chain, islice
 from os import PathLike
 from pathlib import Path
 from typing import Any, Callable, ChainMap, Iterable, TypeGuard, TypeVar, overload
@@ -125,7 +125,7 @@ class Environment:
         files = set(flatmap(globber, set(['**'])))
         yield from {
             file.relative_to(self.root)
-            for file in filter(LocalPath.is_file, files - excluded)
+            for file in chain(filter(LocalPath.is_file, files - excluded), included)
             if file in included or not excluded_dirs.intersection(file.parents)
         }
 
@@ -204,7 +204,7 @@ def _not_none(item: T | None) -> TypeGuard[T]:
     return item is not None
 
 
-def _is_dotfile(filename: str) -> bool:
+def _is_dotfile(filename: str) -> TypeGuard[object]:
     return filename.startswith('.')
 
 
@@ -215,8 +215,14 @@ def _not_hidden(path_str: str) -> bool:
 def iterglob(
     pattern: str | PathLike[str], root: LocalPath=LocalPath('.'),
 ) -> Iterable[LocalPath]:
-    all_matching = glob(str(pattern), root_dir=root, recursive=True)
-    for path in filter(_not_hidden, all_matching):
+    include_hidden = False
+    if any(filter(_is_dotfile, Path(pattern).parts)):
+        include_hidden = True
+    all_matching = glob(
+        str(pattern), root_dir=root, recursive=True,
+        include_hidden=include_hidden,
+    )
+    for path in all_matching:
         yield root / str(path)
 
 
