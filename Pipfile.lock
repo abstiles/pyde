@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "f847bb084184b32dfefba8b3612ccede1ea5538f7d01a238140e9308eb0d4f2c"
+            "sha256": "44d7d4edd3ff4afa1a33825f977c15ee572a492aac8de506ba17039c5011dd21"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -162,12 +162,6 @@
             ],
             "markers": "python_version >= '3.8'",
             "version": "==6.0.2"
-        },
-        "smartypants": {
-            "hashes": [
-                "sha256:8db97f7cbdf08d15b158a86037cd9e116b4cf37703d24e0419a0d64ca5808f0d"
-            ],
-            "version": "==2.0.1"
         }
     },
     "develop": {
@@ -239,6 +233,15 @@
             ],
             "markers": "python_version >= '3.9'",
             "version": "==25.1.0"
+        },
+        "build": {
+            "hashes": [
+                "sha256:1d61c0887fa860c01971625baae8bdd338e517b836a2f70dd1f7aa3a6b2fc5b5",
+                "sha256:b36993e92ca9375a219c99e606a122ff365a760a2d4bba0caa09bd5278b608b7"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.8'",
+            "version": "==1.2.2.post1"
         },
         "click": {
             "hashes": [
@@ -711,6 +714,14 @@
             "markers": "python_full_version >= '3.9.0'",
             "version": "==3.3.6"
         },
+        "pyproject-hooks": {
+            "hashes": [
+                "sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8",
+                "sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913"
+            ],
+            "markers": "python_version >= '3.7'",
+            "version": "==1.2.0"
+        },
         "pyprojroot": {
             "hashes": [
                 "sha256:109705bb790968704958efcfc5ccce85d8e3dafa054897cc81371fcbbf56cb10",
@@ -761,6 +772,25 @@
             "index": "pypi",
             "markers": "python_version >= '3.7'",
             "version": "==0.11.4"
+        },
+        "setuptools": {
+            "hashes": [
+                "sha256:18fd474d4a82a5f83dac888df697af65afa82dec7323d09c3e37d1f14288da54",
+                "sha256:3e386e96793c8702ae83d17b853fb93d3e09ef82ec62722e61da5cd22376dcd8"
+            ],
+            "markers": "python_version >= '3.9'",
+            "version": "==78.1.0"
+        },
+        "setuptools-scm": {
+            "extras": [
+                "toml"
+            ],
+            "hashes": [
+                "sha256:136e2b1d393d709d2bcf26f275b8dec06c48b811154167b0fd6bb002aad17d6d",
+                "sha256:a18396a1bc0219c974d1a74612b11f9dce0d5bd8b1dc55c65f6ac7fd609e8c28"
+            ],
+            "markers": "python_version >= '3.8'",
+            "version": "==8.2.0"
         },
         "sh": {
             "hashes": [
@@ -875,6 +905,15 @@
                 "sha256:72ea0c06399eb286d978fdedb6923a9eb47e1c486ce63e9b4e64fc18303972b5"
             ],
             "version": "==0.2.13"
+        },
+        "wheel": {
+            "hashes": [
+                "sha256:661e1abd9198507b1409a20c02106d9670b2576e916d58f520316666abca6729",
+                "sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.8'",
+            "version": "==0.45.1"
         },
         "xdg": {
             "hashes": [

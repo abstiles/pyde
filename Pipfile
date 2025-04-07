@@ -20,6 +20,9 @@ pyright = "*"
 debugpy = "*"
 coverage = "*"
 snakeviz = "*"
+wheel = "*"
+build = "*"
+setuptools-scm = {extras = ["toml"], version = "*"}
 
 [requires]
 python_version = "3.11"

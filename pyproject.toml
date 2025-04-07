@@ -5,16 +5,16 @@ dependencies = [
     "pyyaml >= 6.0",
     "markdown >= 3.7",
     "jinja2 >= 3.1",
-    "smartypants >= 2.0",
+    "typing-extensions > 4.13",
 ]
+requires-python = ">=3.11.0"
 
 [project.scripts]
 pyde = "pyde.cli:main"
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "wheel", "setuptools-scm[toml]>=8.0"]
 build-backend = "setuptools.build_meta"
-requires-python = ">=3.11.0"
 
 [tool.setuptools]
 packages = ["pyde"]
