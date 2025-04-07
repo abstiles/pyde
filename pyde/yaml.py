@@ -8,7 +8,7 @@ import yaml
 try:
     from yaml import CSafeLoader as Loader
 except ImportError:
-    from yaml import CSafeLoader as Loader
+    from yaml import SafeLoader as Loader  # type: ignore
 
 
 YamlType: TypeAlias = (
