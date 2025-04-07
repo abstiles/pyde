@@ -192,7 +192,7 @@ class AttrListTreeprocessor(Treeprocessor):
     def assign_attrs(self, elem, attrs, parent=None):
         """ Assign attrs to element. """
         #print('assign_attrs(%s, %s, %s)' % (elem, attrs, parent))
-        apply_elem = elem
+        apply_elem = elem if parent is None else parent
         for k, v in get_attrs(attrs):
             if k == '.':
                 # add to class
