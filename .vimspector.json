@@ -1,0 +1,41 @@
+{
+  "configurations": {
+    "build": {
+      "adapter": "debugpy",
+      "variables": {
+        "venv": {
+          "shell" : [ "pipenv", "--venv" ]
+        }
+      },
+      "configuration": {
+        "request": "launch",
+        "jinja": true,
+        "protocol": "auto",
+        "stopOnEntry": false,
+        "console": "integratedTerminal",
+        "python": "${venv}/bin/python",
+        "program": "${venv}/bin/pyde",
+        "args": ["build", "${project}"],
+        "cwd": "${workspaceRoot}"
+      }
+    },
+    "pytest": {
+      "adapter": "debugpy",
+      "variables": {
+        "venv": {
+          "shell" : [ "pipenv", "--venv" ]
+        }
+      },
+      "configuration": {
+        "request": "launch",
+        "jinja": true,
+        "protocol": "auto",
+        "stopOnEntry": false,
+        "console": "integratedTerminal",
+        "python": "${venv}/bin/python",
+        "module": "pytest",
+        "cwd": "${workspaceRoot}"
+      }
+    }
+  }
+}
