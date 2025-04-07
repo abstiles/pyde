@@ -19,6 +19,7 @@ types-markdown = "*"
 pyright = "*"
 debugpy = "*"
 coverage = "*"
+snakeviz = "*"
 
 [requires]
 python_version = "3.11"
