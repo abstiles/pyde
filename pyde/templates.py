@@ -9,7 +9,7 @@ from datetime import date as date_only
 from datetime import datetime
 from operator import attrgetter, itemgetter
 from pathlib import Path
-from typing import Any, Self, TypeVar, cast, overload
+from typing import Any, Literal, Self, TypeVar, cast, overload
 
 import jinja2
 from jinja2 import (
@@ -34,6 +34,8 @@ from .utils import last as ilast
 from .utils import prepend, slugify
 
 T = TypeVar('T')
+K = TypeVar('K')
+V = TypeVar('V')
 
 
 class TemplateManager:
@@ -76,6 +78,7 @@ class TemplateManager:
         self.env.filters['absolute_url'] = absolute_url
         self.env.filters['relative_url'] = relative_url
         self.env.filters['reverse'] = reverse
+        self.env.filters['dictmap'] = dictmap
 
     @property
     def globals(self) -> dict[str, Any]:
@@ -641,3 +644,20 @@ def relative_url(context: Context, path: str) -> str:
 
 def reverse(it: Iterable[T]) -> Iterable[T]:
     return reversed(list(it))
+
+@pass_context
+def dictmap(
+    context: Context,
+    it: Mapping[K, V],
+    filter: str,
+    by: Literal['key',  'value'],
+    *args: Any, **kwargs: Any,
+) -> Mapping[K, Any] | Mapping[Any, V]:
+    def func(item: Any) -> Any:
+        return context.environment.call_filter(
+            filter, item, args, kwargs, context=context
+        )
+
+    if by == 'key':
+        return {func(k): it[k] for k in it}
+    return {k: func(it[k]) for k in it}
