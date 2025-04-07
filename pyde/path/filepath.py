@@ -192,7 +192,14 @@ class LocalPath(WriteablePath, os.PathLike[str]):
                 stat.st_ctime if platform.system() == 'Windows'
                 else stat.st_mtime
             )
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except OverflowError:
+            # For some reason, st_birthtime on FreeBSD (at least my reference
+            # system) reports this as the improbably large value of
+            # 1.8446744073709552e+19 and I have no idea why. At least ctime
+            # seems fine?
+            return datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
 
 
 if TYPE_CHECKING:
