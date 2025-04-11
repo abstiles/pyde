@@ -129,13 +129,13 @@ class AttrListTreeprocessor(Treeprocessor):
                 if parent and parent.tag == 'blockquote':
                     #_dump_tree(0, parent)
                     if len(elem) and elem[-1].tail and (m := self.BLOCK_RE.search(elem[-1].tail)):
-                        self.assign_attrs(parent, m.group(1), parents[parent] if parent in parents else None)
+                        self.assign_attrs(parent, m.group(1))
                         elem[-1].tail = elem[-1].tail[:m.start()]
                     elif elem.text and (m := self.BLOCK_RE.search(elem.text)):
-                        self.assign_attrs(parent, m.group(1), parents[parent] if parent in parents else None)
+                        self.assign_attrs(parent, m.group(1))
                         elem.text = elem.text[:m.start()]
                     if elem.text and (m := self.WITHIN_BLOCK_RE.search(elem.text)):
-                        self.assign_attrs(elem, m.group(1), parent)
+                        self.assign_attrs(elem, m.group(1))
                         elem.text = elem.text[:m.start()]
                 if len(elem) and elem.tag == 'li':
                     # special case list items. children may include a ul or ol.
