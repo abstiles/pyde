@@ -11,7 +11,7 @@ class Wrapped(Protocol,Generic[T_co]):
     def __call__(self, *args: Any, **kwargs: Any) -> T_co: ...
     __qualname__: str
 
-class Proxy(Protocol, Generic[T_co]):
+class Proxy(Generic[T_co]):
     def __getattr__(self, key: Any) -> Any: ...
     def __setattr__(self, key: Any, val: Any) -> None: ...
     def __delattr__(self, key: Any) -> None: ...
@@ -36,7 +36,7 @@ def parametrize(
             test_params.pop(self)
         if args is None:
             params = [name for (name, p) in test_params.items()
-                      if p.annotation is not NoParam]
+                      if _should_be_parametrized(p)]
         else:
             params = args.split(',') if isinstance(args, str) else args
         indirect = [name for name in params if _is_indirect(test_params[name])]
@@ -46,6 +46,13 @@ def parametrize(
             return func(*args, **kwargs)
         return cast(Wrapped[T], wrapper)
     return decorator
+
+
+def _should_be_parametrized(param: inspect.Parameter) -> bool:
+    try:
+        return param.annotation.__name__ != 'NoParam'  # type: ignore
+    except:  # pylint: disable=bare-except
+        return True
 
 
 def _is_indirect(param: inspect.Parameter) -> bool:

@@ -25,7 +25,7 @@ from markupsafe import Markup
 from typing_extensions import Concatenate
 
 from .data import AutoDate, Data
-from .markdown import markdownify
+from .markdown import MarkdownParser
 from .path import (
     AnyDest,
     AnySource,
@@ -606,16 +606,17 @@ class MetaProcessorTransformer(TextTransformer):
 class MarkdownTransformer(TextTransformer, pattern='*.md'):
     """Transform markdown to HTML"""
     PARA_RE = re.compile('<p[^>]*>(.*?)</p>', flags=re.DOTALL)
+    markdown_parser = MarkdownParser()
 
     def transformed_name(self) -> str:
         return str(self.source.with_suffix('.html').name)
 
     def transform_text(self, text: str) -> str:
-        html = markdownify(text)
+        html = self.markdown_parser.parse(text)
         page = self.metadata
         try:
             if page.get('description'):
-                page['description'] = markdownify(page['description'])
+                page['description'] = self.markdown_parser.parse(page['description'])
             page['excerpt'] = self.PARA_RE.search(html)[0]  # type: ignore [index]
             page['word_count'] = 1 + ilen(re.finditer(r'\s+', Markup(html).striptags()))
         except (TypeError, IndexError):

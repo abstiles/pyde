@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from pyde.markdown import markdownify
+from pyde.markdown import MarkdownParser
 
 
 def test_blockquote_attrs() -> None:
@@ -13,7 +13,7 @@ def test_blockquote_attrs() -> None:
         <p>This is a blockquote</p>
         </blockquote>
     ''').rstrip()
-    assert markdownify(md_text) == expected_html
+    assert MarkdownParser().parse(md_text) == expected_html
 
 
 def test_list_attrs() -> None:
@@ -28,4 +28,4 @@ def test_list_attrs() -> None:
         <li>With two items</li>
         </ul>
     ''').rstrip()
-    assert markdownify(md_text) == expected_html
+    assert MarkdownParser().parse(md_text) == expected_html

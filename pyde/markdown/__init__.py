@@ -1,3 +1,3 @@
-from .handler import Markdown, markdownify
+from .handler import MarkdownConfig, MarkdownParser
 
-__all__= ['Markdown', 'markdownify']
+__all__= ['MarkdownParser', 'MarkdownConfig']

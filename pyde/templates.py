@@ -26,8 +26,9 @@ from jinja2.lexer import Lexer, Token, TokenStream
 from jinja2.runtime import Context, Undefined
 from jinja2.utils import Namespace
 
+from pyde.markdown.handler import MarkdownParser
+
 from .data import AutoDate
-from .markdown import markdownify
 from .path import AnyRealPath, ReadablePath, UrlPath
 from .utils import first as ifirst
 from .utils import last as ilast
@@ -661,3 +662,12 @@ def dictmap(
     if by == 'key':
         return {func(k): it[k] for k in it}
     return {k: func(it[k]) for k in it}
+
+
+@pass_context
+def markdownify(context: Context, md: str) -> str:
+    parser = cast(
+        MarkdownParser,
+        context.resolve('pyde').env.markdown_parser
+    )
+    return parser.parse(md)
