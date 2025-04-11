@@ -15,7 +15,7 @@ from .data import Data
 from .markdown.handler import MarkdownParser
 from .path import FilePath, LocalPath
 from .plugins import PluginManager
-from .site import SiteFileManager
+from .site import NullPaginator, Paginator, SiteFileManager
 from .templates import TemplateManager
 from .transformer import CopyTransformer, MarkdownTransformer, Transformer
 from .utils import flatmap
@@ -31,29 +31,30 @@ class Environment:
     ):
         self.exec_dir = LocalPath(config.config_root)
         self.config = config
+        self.global_defaults: ChainMap[str, Any] = ChainMap({
+            "permalink": config.permalink,
+            "layout": "default",
+            "site_url": self.config.url,
+        })
 
         pyde = Data(
             environment='development' if config.drafts else 'production',
             env=self,
             **dataclasses.asdict(config)
         )
-        self._site = SiteFileManager(self.root, self.output_dir, self.config.url)
-        self._site_loaded = False
         self.template_manager = TemplateManager(
-            self.includes_dir,
-            self.layouts_dir,
-            globals={
-                'site': self._site,
-                'pyde': pyde,
-                'jekyll': pyde,
-            },
+            self.includes_dir, self.layouts_dir,
+            globals={'pyde': pyde, 'jekyll': pyde},
         )
-        self.global_defaults: ChainMap[str, Any] = ChainMap({
-            "permalink": config.permalink,
-            "layout": "default",
-            "metaprocessor": self.template_manager.render,
-            "site_url": self.config.url,
-        })
+        self._site_loaded = False
+        self._site = SiteFileManager(
+            tag_paginator=self._tag_paginator(),
+            collection_paginator=self._collection_paginator(),
+            page_defaults=self.global_defaults,
+        )
+        self._site.data.url = self.config.url
+        self.template_manager.globals['site'] = self._site
+        self.global_defaults["metaprocessor"] = self.template_manager.render
 
         PluginManager(self.plugins_dir).import_plugins(self)
 
@@ -97,12 +98,9 @@ class Environment:
     def site(self) -> SiteFileManager:
         if self._site_loaded:
             return self._site
-        self._process_sources()
-        self._process_collections()
-        if self.config.tags.enabled:
-            self._process_tags()
+        self.process_files(map(LocalPath, self.source_files()))
         self._site_loaded = True
-        return self._site.load()
+        return self._site
 
     def build(self) -> None:
         self.output_dir.mkdir(exist_ok=True)
@@ -160,8 +158,8 @@ class Environment:
                 return True
         return False
 
-    def _process_sources(self) -> None:
-        for source in map(LocalPath, self.source_files()):
+    def process_files(self, sources: Iterable[LocalPath]) -> None:
+        for source in sources:
             if not self.should_transform(source):
                 self._site.append(
                     CopyTransformer(
@@ -181,18 +179,22 @@ class Environment:
 
             self._site.append(tf.pipe(template=template))
 
-    def _process_collections(self) -> None:
+    def _collection_paginator(self) -> Paginator:
         pagination = self.config.paginate
         template = self.template_manager.get_template(f'{pagination.template}.html')
-        self._site.generate_collection_pages(
-            template, pagination.permalink, pagination.size, self.global_defaults,
+        return Paginator(
+            template, pagination.permalink, self.root, self.output_dir,
+            maximum=pagination.size,
         )
 
-    def _process_tags(self) -> None:
+    def _tag_paginator(self) -> Paginator:
+        if not self.config.tags.enabled:
+            return NullPaginator()
         tag_spec = self.config.tags
         template = self.template_manager.get_template(f'{tag_spec.template}.html')
-        self._site.generate_tag_pages(
-            template, tag_spec.permalink, tag_spec.minimum, self.global_defaults,
+        return Paginator(
+            template, tag_spec.permalink, self.root, self.output_dir,
+            minimum=tag_spec.minimum if tag_spec.enabled else -1,
         )
 
     def output_files(self) -> Iterable[FilePath]:

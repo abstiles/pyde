@@ -1,22 +1,23 @@
 from __future__ import annotations
 
+import contextlib
 from collections import ChainMap
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from itertools import chain, islice
 from math import ceil
 from operator import attrgetter
 from types import MappingProxyType
-from typing import Any, Callable, Generator, Literal, Protocol, Self, TypeAlias
+from typing import Any, Callable, Generator, Literal, Protocol, Self, TypeAlias, cast
 
 from jinja2 import Template
 
 from .data import Data
 from .path import ReadablePath, UrlPath, VirtualPath, WriteablePath
 from .transformer import CopyTransformer, Transformer
-from .utils import CaseInsensitiveStr, batched, seq_pivot, slugify
+from .utils import CaseInsensitiveStr, Maybe, batched, slugify
 
-SiteFileType: TypeAlias = Literal['post', 'page', 'raw', 'meta']
+SiteFileType: TypeAlias = Literal['post', 'page', 'raw', 'meta', 'none']
 
 
 class Tag(CaseInsensitiveStr):
@@ -24,8 +25,20 @@ class Tag(CaseInsensitiveStr):
 
 
 class SiteFile:
+    tf: Transformer
+    type: SiteFileType
+
     def __init__(self, tf: Transformer, type: SiteFileType):
-        self.tf, self.type = tf, type
+        self.tf = tf
+        self.type = type
+
+    def __bool__(self) -> bool:
+        return self.type != 'none'
+
+    @classmethod
+    def none(cls) -> Self:
+        # Should use a proper null object for either this or the Transformer.
+        return cls(cast(Transformer, None), 'none')
 
     @classmethod
     def raw(cls, tf: Transformer) -> Self:
@@ -65,70 +78,59 @@ class SiteFile:
         return self.tf.outputs
 
     @property
+    def path(self) -> UrlPath:
+        path = self.metadata.path
+        if not isinstance(path, UrlPath):
+            raise RuntimeError(f'Unknown path for {self.metadata}')
+        return path
+
+    @property
     def metadata(self) -> Data:
+        if not self:
+            return Data()
         return Data(self.tf.metadata)
 
     @property
-    def tags(self) -> Iterable[Tag]:
-        return map(Tag, self.metadata.get('tags', ()))
+    def tags(self) -> set[Tag]:
+        return set(map(Tag, self.metadata.get('tags', ())))
+
+    @property
+    def collection(self) -> str | None:
+        return self.metadata.get('collection')
 
 
 class SiteFileManager(Iterable[SiteFile]):
-    def __init__(
-        self,
-        source_root: ReadablePath,
-        dest_root: WriteablePath,
-        url: UrlPath,
+    def __init__(self,
+        *,
+        tag_paginator: Paginator,
+        collection_paginator: Paginator,
+        page_defaults: dict[str, Any] | ChainMap[str, Any] | None = None,
     ) -> None:
-        self._file_processor = FileProcessor(source_root, dest_root)
-        self._url = url
-        self._files: Mapping[SiteFileType, Iterable[SiteFile]] = {}
-        self._tags: Mapping[Tag, Sequence[SiteFile]] = {}
-        self._loaded = False
+        self._file_processor = FileProcessor(
+            tag_paginator, collection_paginator,
+            # Mypy seems to simplify the type here to just the common "Mapping"
+            # shared between dict and ChainMap.
+            Maybe(page_defaults).get({}), # type: ignore [arg-type]
+        )
+        self._site_data: Data = Data()
+
+    @property
+    def data(self) -> Data:
+        return self._site_data
+
+    def __getitem__(self, key: str) -> Any:
+        return self._site_data[key]
 
     def append(
         self, transformer: Transformer, type: SiteFileType | None = None,
     ) -> Self:
-        self._file_processor.append(transformer, type)
-        return self
-
-    def generate_tag_pages(
-        self,
-        template: Template,
-        permalink: str,
-        minimum: int,
-        defaults: dict[str, Any] | ChainMap[str, Any]
-    ) -> Self:
-        self._file_processor.generate_tag_pages(
-            template, permalink, minimum, defaults
-        )
-        return self
-
-    def generate_collection_pages(
-        self,
-        template: Template,
-        permalink: str,
-        page_size: int,
-        defaults: dict[str, Any] | ChainMap[str, Any]
-    ) -> Self:
-        self._file_processor.generate_collection_pages(
-            template, permalink, page_size, defaults
-        )
+        self._file_processor.update(transformer, type)
         return self
 
     def _page_data(self, type: SiteFileType) -> Iterable[Mapping[str, Any]]:
         return [
-            f.metadata for f in self.files.get(type, ())
+            f.metadata for f in self._file_processor.type_map.get(type, ())
         ]
-
-    @property
-    def url(self) -> UrlPath:
-        return self._url
-
-    @property
-    def files(self) -> Mapping[SiteFileType, Iterable[SiteFile]]:
-        self.load()
-        return self._files
 
     @property
     def pages(self) -> Iterable[Mapping[str, Any]]:
@@ -148,26 +150,18 @@ class SiteFileManager(Iterable[SiteFile]):
 
     @property
     def tags(self) -> Mapping[str, list[Data]]:
-        self.load()
         return {
             tag: [post.metadata for post in posts]
             for tag, posts in self._file_processor.tag.items()
         }
 
-    def load(self) -> Self:
-        if self._loaded:
-            return self
-        self._files = seq_pivot(self._file_processor, attr='type')
-        self._loaded = True
-        return self
-
     def __iter__(self) -> Iterator[SiteFile]:
         type_ordering: Iterable[SiteFileType] = ('post', 'page', 'raw', 'meta')
         for file_type in type_ordering:
-            yield from self.files.get(file_type, ())
+            yield from self._file_processor.type_map.get(file_type, ())
 
 
-class Collection:
+class PostCollection:
     def __init__(self, name: str, posts: Sequence[SiteFile] = (), **kwargs: Any):
         self._name = name
         self._posts = [post.metadata for post in posts]
@@ -216,7 +210,8 @@ class Paginator:
     permalink: str
     source_dir: ReadablePath
     dest_dir: WriteablePath
-    page_size: int = 0
+    minimum: int = 1
+    maximum: int = 0
     sort_by: InitVar[str | Callable[[Data], Sortable]] = attrgetter('date')
     key: Callable[[Data], Sortable] = field(init=False)
 
@@ -225,19 +220,19 @@ class Paginator:
         object.__setattr__(self, 'key', key)
 
     def paginate(
-        self, name: str, posts: list[SiteFile], metadata: ChainMap[str, Any],
+        self, name: str, sources: Collection[SiteFile], metadata: ChainMap[str, Any],
         index: str | None='index',
     ) -> Iterable[SiteFile]:
-        if len(posts) == 0:
+        if len(sources) < max(1, self.minimum):
             return []
-        posts = sorted(posts, key=lambda s: self.key(s.metadata), reverse=True)
-        source_dir = posts[0].source.parent
-        if self.page_size > 0:
-            total_pages = ceil(len(posts) / self.page_size)
-            paginations = iter(batched(posts, self.page_size))
+        sources = sorted(sources, key=lambda s: self.key(s.metadata), reverse=True)
+        source_dir = sources[0].source.parent
+        if self.maximum > 0:
+            total_pages = ceil(len(sources) / self.maximum)
+            paginations = iter(batched(sources, self.maximum))
         else:
             total_pages = 1
-            paginations = iter([posts])
+            paginations = iter([sources])
         if index is not None:
             # Generate the index page as a first page in addition to the
             # usual "page 1" page, but don't generate two instances of the
@@ -257,8 +252,8 @@ class Paginator:
                 'permalink': permalink,
                 'num': idx,
                 'template': self.template,
-                'collection': Collection(
-                    name, page_posts, total_posts=len(posts),
+                'collection': PostCollection(
+                    name, page_posts, total_posts=len(sources),
                     total_pages=total_pages,
                 ),
             })
@@ -287,75 +282,93 @@ TagMap: TypeAlias = Mapping[Tag, Sequence[SiteFile]]
 
 
 class FileProcessor(Iterable[SiteFile]):
-    _files: list[SiteFile]
-    _tag_map: dict[Tag, list[SiteFile]]
-    _collections: dict[str, list[SiteFile]]
+    _buffer: list[SiteFile]
+    _cache: list[SiteFile]
+    _files: dict[ReadablePath, SiteFile]
+    _tag_map: dict[Tag, set[SiteFile]]
+    _type_map: dict[SiteFileType, set[SiteFile]]
+    _collections: dict[str, set[SiteFile]]
 
-    def __init__(self, source_root: ReadablePath, dest_root: WriteablePath) -> None:
-        self._source_root = source_root
-        self._dest_root = dest_root
+    def __init__(self,
+        tag_paginator: Paginator,
+        collection_paginator: Paginator,
+        page_defaults: dict[str, Any] | ChainMap[str, Any],
+    ) -> None:
+        self._tag_paginator = tag_paginator
+        self._collection_paginator = collection_paginator
+        if not isinstance(page_defaults, ChainMap):
+            page_defaults = ChainMap(page_defaults)
+        self.defaults = page_defaults
         self._generator = self._process()
         next(self._generator)
 
     def _process(self) -> Generator[None, SiteFile, None]:
-        self._files = []
+        self._buffer = []
+        self._files = {}
         self._tag_map = {}
+        self._type_map = {}
         self._collections = {}
         while True:
             site_file = yield
-            self._files.append(site_file)
+            if existing := self._files.get(site_file.source, SiteFile.none()):
+                self._type_map.get(existing.type, set()).discard(existing)
+                with contextlib.suppress(ValueError):
+                    self._buffer.remove(existing)
+                if collection := existing.collection:
+                    self._collections.get(collection, set()).discard(existing)
+            self._buffer.append(site_file)
+            self._files[site_file.source] = site_file
+            self._type_map.setdefault(site_file.type, set()).add(site_file)
             if site_file.type == 'post':
-                self._collections.setdefault(site_file.metadata.collection, []).append(
-                    site_file
-                )
-                for tag in (site_file.tf.metadata.get('tags') or []):
-                    self._tag_map.setdefault(tag, []).append(site_file)
-
-    def generate_tag_pages(
-        self,
-        template: Template,
-        permalink: str,
-        minimum: int,
-        defaults: dict[str, Any] | ChainMap[str, Any]
-    ) -> Self:
-        if not isinstance(defaults, ChainMap):
-            defaults = ChainMap(defaults)
-        paginator = Paginator(
-            template, permalink, self._source_root, self._dest_root,
-        )
-        for tag, posts in self._tag_map.items():
-            if len(posts) < minimum:
-                continue
-            self._files.extend(paginator.paginate(
-                tag, posts, defaults, index=slugify(tag),
-            ))
-        return self
-
-    def generate_collection_pages(
-        self,
-        template: Template,
-        permalink: str,
-        page_size: int,
-        defaults: dict[str, Any] | ChainMap[str, Any]
-    ) -> Self:
-        if not isinstance(defaults, ChainMap):
-            defaults = ChainMap(defaults)
-        paginator = Paginator(
-            template, permalink, self._source_root, self._dest_root,
-            page_size=page_size,
-        )
-        for collection, posts in self._collections.items():
-            self._files.extend(paginator.paginate(collection, posts, defaults))
-        return self
+                if collection := site_file.collection:
+                    self._collections.setdefault(collection, set()).add(site_file)
+                for tag in existing.tags:
+                    self._tag_map.setdefault(tag, set()).discard(existing)
+                for tag in site_file.tags:
+                    self._tag_map.setdefault(tag, set()).add(site_file)
 
     def __iter__(self) -> Iterator[SiteFile]:
-        return iter(self._files)
+        yield from self.files
 
     @property
-    def tag(self) -> Mapping[Tag, Sequence[SiteFile]]:
+    def tag(self) -> Mapping[Tag, Collection[SiteFile]]:
+        self._process_files()
         return MappingProxyType(self._tag_map)
 
-    def append(
+    @property
+    def type_map(self) -> Mapping[SiteFileType, Collection[SiteFile]]:
+        self._process_files()
+        return MappingProxyType(self._type_map)
+
+    @property
+    def files(self) -> Iterable[SiteFile]:
+        yield from self._process_files()
+
+    def _process_files(self) -> Collection[SiteFile]:
+        """Processes any new files, returning the current collection"""
+        def new_files() -> Iterable[SiteFile]:
+            yield from self._buffer
+            self._buffer.clear()
+        if len([*new_files()]) > 0:
+            self._cache = [*self.generate_files()]
+        return self._cache
+
+    def generate_files(self) -> Iterable[SiteFile]:
+        yield from self._files.values()
+        for tag, posts in self._tag_map.items():
+            for page in self._tag_paginator.paginate(
+                tag, posts, self.defaults, index=slugify(tag),
+            ):
+                self._type_map.setdefault('meta', set()).add(page)
+                yield page
+        for collection, posts in self._collections.items():
+            for page in self._collection_paginator.paginate(
+                collection, posts, self.defaults,
+            ):
+                self._type_map.setdefault('meta', set()).add(page)
+                yield page
+
+    def update(
         self, transformer: Transformer, type: SiteFileType | None = None,
     ) -> Self:
         self._generator.send(
@@ -363,3 +376,11 @@ class FileProcessor(Iterable[SiteFile]):
             else SiteFile.classify(transformer)
         )
         return self
+
+
+class NullPaginator(Paginator):
+    def __init__(self, *_: Any, **__: Any):  # pylint: disable=super-init-not-called
+        pass
+
+    def paginate(self, *_: Any, **__: Any) -> Iterable[SiteFile]:
+        return []

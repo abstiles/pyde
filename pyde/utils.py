@@ -5,7 +5,6 @@ import re
 from collections import deque
 from collections.abc import Generator, Mapping, Reversible, Sequence
 from dataclasses import fields, is_dataclass
-from functools import wraps
 from itertools import chain, count, islice
 from types import GenericAlias
 from typing import (
@@ -23,7 +22,6 @@ from typing import (
 )
 
 from typing_extensions import ParamSpec
-
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -126,7 +124,7 @@ class Maybe(Generic[T_co]):
     """A generic, optional value"""
 
     NOT: 'Maybe[T_co]'
-    __it: T_co
+    __it: T_co | None
 
     @classmethod
     def yes(cls, value: T) -> 'Maybe[T]':
@@ -147,7 +145,7 @@ class Maybe(Generic[T_co]):
             return cls.NOT
         return object.__new__(cls)
 
-    def __init__(self, value: T_co):
+    def __init__(self, value: T_co | None):
         self.__it = value
 
     def __repr__(self) -> str:
@@ -156,7 +154,7 @@ class Maybe(Generic[T_co]):
         return f'Maybe({self.__it!r})'
 
     def __iter__(self) -> Iterator[T_co]:
-        if self is Maybe.no():
+        if self.__it is None:
             return iter(())
         return iter((self.__it,))
 
@@ -164,24 +162,24 @@ class Maybe(Generic[T_co]):
         return self is not Maybe.no()
 
     def get(self, default: U=cast(Any, RaiseValueError())) -> T_co | U:
-        if self is Maybe.no():
+        if self.__it is not None:
             return self.__it
         if RaiseValueError.is_not(default):
             return default
         raise ValueError(f'{self} has no value')
 
     def or_maybe(self, other: 'Maybe[U]') -> 'Maybe[T_co | U]':
-        if self is Maybe.no():
+        if self.__it is None:
             return other
         return self
 
     def map(self, f: Callable[[T_co], U]) -> 'Maybe[U]':
-        if self is Maybe.no():
+        if self.__it is not None:
             return Maybe(f(self.__it))
         return cast(Maybe[U], self)
 
     def flatmap(self, f: Callable[[T_co], 'Maybe[U]']) -> 'Maybe[U]':
-        if self is Maybe.no():
+        if self.__it is not None:
             return f(self.__it)
         return cast(Maybe[U], self)
 
