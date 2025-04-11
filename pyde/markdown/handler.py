@@ -8,20 +8,20 @@ from html.parser import HTMLParser
 from typing import Any, ClassVar, Literal, Self, TypeAlias
 
 from markdown import Extension
-from markdown import Markdown as Parser
+from markdown import Markdown as MarkdownEngine
 
 from .extensions.blockquote import BlockQuoteExtension
 from .extensions.pm_attr_list import PMAttrListExtension
 
 
-def _extensions() -> list[Extension | str]:
+def default_extensions() -> list[Extension | str]:
     return [
         'md_in_html', 'smarty', 'sane_lists', PMAttrListExtension(),
         BlockQuoteExtension(),
     ]
 
 
-def _ext_configs() -> dict[str, dict[str, Any]]:
+def default_ext_configs() -> dict[str, dict[str, Any]]:
     return {
         'smarty': {
             'substitutions': {
@@ -37,21 +37,6 @@ def _ext_configs() -> dict[str, dict[str, Any]]:
             }
         }
     }
-
-
-@dataclass(frozen=True)
-class MarkdownConfig(Mapping[str, Any]):
-    extensions: list[Extension | str] = field(default_factory=_extensions)
-    extension_configs: dict[str, dict[str, Any]] = field(default_factory=_ext_configs)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(asdict(self))
-
-    def __len__(self) -> int:
-        return len(asdict(self))
-
-    def __getitem__(self, key: str) -> Any:
-        return asdict(self)[key]
 
 
 DASH_PATTERN = (
@@ -115,25 +100,18 @@ WITHIN_BLOCK_ATTR_RE = re.compile(
 
 BACKSLASH_LT_RE = re.compile(r'(?<!\\)\\((?:\\{2})*)(?!\\)<')
 
-@dataclass
-class Markdown:
+class MarkdownParser:
     """Markdown parser"""
-    markdown: str
-    html: str = field(init=False)
-    parser: ClassVar[Parser]
 
-    def __post_init__(self) -> None:
-        self.html = HTMLCleaner.clean(
-            self.get_parser().convert(self.preprocess(self.markdown))
-        )
+    def __init__(self, parser: MarkdownEngine | None = None):
+        if parser is None:
+            parser = MarkdownConfig().get_engine()
+        self.parser = parser
 
-    @classmethod
-    def get_parser(cls, config: MarkdownConfig=MarkdownConfig()) -> Parser:
-        try:
-            return cls.parser.reset()
-        except AttributeError:
-            cls.parser = Parser(**config)
-        return cls.parser
+    def parse(self, markdown: str) -> str:
+        preprocessed_md = self.preprocess(markdown)
+        processed_html = self.parser.convert(preprocessed_md)
+        return HTMLCleaner.clean(processed_html)
 
     @staticmethod
     def preprocess(markdown: str) -> str:
@@ -152,8 +130,27 @@ class Markdown:
         return fixed
 
 
-def markdownify(markdown: str) -> str:
-    return Markdown(markdown).html
+@dataclass(frozen=True)
+class MarkdownConfig(Mapping[str, Any]):
+    extensions: list[Extension | str] = field(default_factory=default_extensions)
+    extension_configs: dict[str, dict[str, Any]] = field(
+        default_factory=default_ext_configs
+    )
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(asdict(self))
+
+    def __len__(self) -> int:
+        return len(asdict(self))
+
+    def __getitem__(self, key: str) -> Any:
+        return asdict(self)[key]
+
+    def get_engine(self) -> MarkdownEngine:
+        return MarkdownEngine(**self)
+
+    def make_parser(self) -> MarkdownParser:
+        return MarkdownParser(self.get_engine())
 
 
 HTMLEntityType: TypeAlias = Literal[
@@ -232,7 +229,7 @@ class HTMLCleaner(HTMLParser):
                 last = str(self.entities[idx - 1]) if idx > 0 else ''
                 nxt = str(self.entities[idx + 1]) if idx < (size - 1) else ''
                 snippet = f'{last}{entity}{nxt}'
-                clean_text = Markdown.clean(snippet)
+                clean_text = MarkdownParser.clean(snippet)
                 text_only = clean_text[len(last):len(snippet) - len(nxt)]
                 self.write(text_only)
                 continue

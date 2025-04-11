@@ -5,17 +5,19 @@ import re
 import shutil
 from functools import partial
 from glob import glob
-from itertools import chain, islice
+from itertools import islice
 from os import PathLike
 from pathlib import Path
 from typing import Any, Callable, ChainMap, Iterable, TypeGuard, TypeVar, overload
 
 from .config import Config
 from .data import Data
+from .markdown.handler import MarkdownParser
 from .path import FilePath, LocalPath
+from .plugins import PluginManager
 from .site import SiteFileManager
 from .templates import TemplateManager
-from .transformer import CopyTransformer, Transformer
+from .transformer import CopyTransformer, MarkdownTransformer, Transformer
 from .utils import flatmap
 
 T = TypeVar('T')
@@ -27,15 +29,14 @@ class Environment:
         self,
         config: Config, /,
     ):
+        self.exec_dir = LocalPath(config.config_root)
+        self.config = config
+
         pyde = Data(
             environment='development' if config.drafts else 'production',
+            env=self,
             **dataclasses.asdict(config)
         )
-
-        self.exec_dir = LocalPath(
-            config.config_file.parent if config.config_file else '.'
-        )
-        self.config = config
         self._site = SiteFileManager(self.root, self.output_dir, self.config.url)
         self._site_loaded = False
         self.template_manager = TemplateManager(
@@ -54,6 +55,16 @@ class Environment:
             "site_url": self.config.url,
         })
 
+        PluginManager(self.plugins_dir).import_plugins(self)
+
+    @property
+    def markdown_parser(self) -> MarkdownParser:
+        return MarkdownTransformer.markdown_parser
+
+    @markdown_parser.setter
+    def markdown_parser(self, new_parser: MarkdownParser) -> None:
+        MarkdownTransformer.markdown_parser = new_parser
+
     @property
     def includes_dir(self) -> LocalPath:
         return self.exec_dir / self.config.includes_dir
@@ -69,6 +80,10 @@ class Environment:
     @property
     def drafts_dir(self) -> LocalPath:
         return self.exec_dir / self.config.drafts_dir
+
+    @property
+    def plugins_dir(self) -> LocalPath:
+        return self.exec_dir / self.config.plugins_dir
 
     @property
     def posts_dir(self) -> LocalPath:
@@ -114,6 +129,7 @@ class Environment:
             self.config.output_dir,
             self.config.layouts_dir,
             self.config.includes_dir,
+            self.config.plugins_dir,
             self.config.config_file,
             *self.config.exclude,
         ]))
@@ -125,7 +141,7 @@ class Environment:
         files = set(flatmap(globber, set(['**'])))
         yield from {
             file.relative_to(self.root)
-            for file in chain(filter(LocalPath.is_file, files - excluded), included)
+            for file in filter(LocalPath.is_file, (files - excluded) | included)
             if file in included or not excluded_dirs.intersection(file.parents)
         }
 
