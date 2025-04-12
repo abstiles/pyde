@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pyde = {file = ".", editable = true}
+pyde-ssg = {file = ".", editable = true}
 
 [dev-packages]
 mypy = "*"
@@ -23,6 +23,7 @@ snakeviz = "*"
 wheel = "*"
 build = "*"
 setuptools-scm = {extras = ["toml"], version = "*"}
+scalene = "*"
 
 [requires]
 python_version = "3.11"
