@@ -69,6 +69,8 @@ class SiteFile:
         return cls.raw(tf)
 
     def render(self) -> WriteablePath:
+        if self._rendered:
+            return self.tf.outputs
         self._rendered = True
         return self.tf.transform()
 
@@ -371,19 +373,36 @@ class FileProcessor(Iterable[SiteFile]):
         return self._cache
 
     def generate_files(self) -> Iterable[SiteFile]:
-        yield from self._files.values()
+        files: Iterable[SiteFile] = self._files.values()
         for tag, posts in self._tag_map.items():
-            for page in self._tag_paginator.paginate(
-                tag, posts, self.defaults, index=slugify(tag),
-            ):
-                self._type_map.setdefault('meta', set()).add(page)
-                yield page
+            if all(post.rendered for post in posts):
+                # No need to regenerate the tags if there are no new,
+                # unrendered posts.
+                continue
+            files = chain(files, self._generate_tag_pages(tag, posts))
         for collection, posts in self._collections.items():
-            for page in self._collection_paginator.paginate(
-                collection, posts, self.defaults,
-            ):
-                self._type_map.setdefault('meta', set()).add(page)
-                yield page
+            if all(post.rendered for post in posts):
+                continue
+            files = chain(files, self._generate_collection_pages(collection, posts))
+        return files
+
+    def _generate_tag_pages(
+        self, tag: Tag, posts: Collection[SiteFile]
+    ) -> Iterable[SiteFile]:
+        for page in self._tag_paginator.paginate(
+            tag, posts, self.defaults, index=slugify(tag),
+        ):
+            self._type_map.setdefault('meta', set()).add(page)
+            yield page
+
+    def _generate_collection_pages(
+        self, collection: str, posts: Collection[SiteFile]
+    ) -> Iterable[SiteFile]:
+        for page in self._collection_paginator.paginate(
+            collection, posts, self.defaults,
+        ):
+            self._type_map.setdefault('meta', set()).add(page)
+            yield page
 
     def update(
         self, transformer: Transformer, type: SiteFileType | None = None,

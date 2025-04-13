@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+from datetime import datetime
 import re
 import shutil
 import time
@@ -107,6 +109,8 @@ class Environment:
         return self._site
 
     def build(self) -> None:
+        print(f'Building contents of {self.root}...')
+        start = datetime.now()
         self.output_dir.mkdir(exist_ok=True)
         # Check to see what already exists in the output directory.
         existing_files = set(self.output_dir.rglob('*'))
@@ -116,16 +120,18 @@ class Environment:
         outputs = flatmap(file_and_parents(upto=self.output_dir), built_files)
         for file in outputs:
             existing_files.discard(file)
+        print('Build complete. Cleaning up stale files.')
         for file in existing_files:
             print(f'Removing: {file}')
             if file.is_dir():
                 shutil.rmtree(file, ignore_errors=True)
             else:
                 file.unlink(missing_ok=True)
+        end = datetime.now()
+        print(f'Done in {(end - start).total_seconds():.2f}s')
 
     def watch(self) -> None:
-        self.output_dir.mkdir(exist_ok=True)
-        existing_files = set(self.output_dir.rglob('*'))
+        self.build()
         class SiteUpdater:
             @staticmethod
             def update(path: LocalPath) -> None:
@@ -133,30 +139,23 @@ class Environment:
             @staticmethod
             def delete(*_: LocalPath) -> None: ...
 
-        with SourceWatcher(
+        watcher = SourceWatcher(
             self.root,
             excluded=self._excluded_paths(),
             included=self.config.include
-        ) as watcher:
-            watcher.register(SiteUpdater)
-            while True:
+        )
+        watcher.register(SiteUpdater).start()
+        while True:
+            try:
                 for file in self.site:
-                    try:
-                        outputs = file_and_parents(file.render(), upto=self.output_dir)
-                        for built_file in outputs:
-                            existing_files.discard(built_file)
-                    except FileNotFoundError:
-                        # The file got deleted before we could process it.
-                        # That's fine. Just ignore and move on.
-                        pass
-                for path in existing_files:
-                    print(f'Removing: {path}')
-                    if path.is_dir():
-                        shutil.rmtree(path, ignore_errors=True)
-                    else:
-                        path.unlink(missing_ok=True)
-                existing_files.clear()
+                    # It's fine if the file gets deleted before we can process it.
+                    # Nothing else to do but ignore and move on.
+                    with contextlib.suppress(FileNotFoundError):
+                        file.render()
                 time.sleep(1)
+            except KeyboardInterrupt:
+                print('\nStopping.')
+                break
 
     def _excluded_paths(self) -> Collection[Path | str]:
         exclude_patterns = set(filter(_not_none, [

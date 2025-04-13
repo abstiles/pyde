@@ -54,8 +54,9 @@ class SourceWatcher(FileSystemEventHandler):
         self._observer: BaseObserver | None = None
         self._listener = NullListener
 
-    def register(self, listener: Listener) -> None:
+    def register(self, listener: Listener) -> Self:
         self._listener = listener
+        return self
 
     def __enter__(self) -> Self:
         return self.start()

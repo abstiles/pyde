@@ -23,6 +23,11 @@ class Data(Mapping[str, Any]):
         super().__setattr__('_d', d or {})
         self._d.update(kwargs)
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Data):
+            return False
+        return self._d == other._d
+
     def __html__(self) -> str:
         return ''
 
