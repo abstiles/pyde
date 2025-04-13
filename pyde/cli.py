@@ -34,6 +34,12 @@ def main() -> int:
     )
     build_parser.set_defaults(func=build)
 
+    build_parser = subparsers.add_parser(
+        'watch', help='Build your site and watch for changes',
+        parents=[config_settings],
+    )
+    build_parser.set_defaults(func=watch)
+
     config_cmd_parser = subparsers.add_parser(
         'config', parents=[config_settings],
         help='Print the current configuration, including all defaults',
@@ -58,6 +64,13 @@ def build(opts: argparse.Namespace) -> int:
     """Build the site"""
     config = get_config(opts)
     Pyde(config).build()
+    return 0
+
+
+def watch(opts: argparse.Namespace) -> int:
+    """Build the site and watch"""
+    config = get_config(opts)
+    Pyde(config).watch()
     return 0
 
 

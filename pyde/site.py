@@ -7,6 +7,7 @@ from dataclasses import InitVar, dataclass, field
 from itertools import chain, islice
 from math import ceil
 from operator import attrgetter
+import threading
 from types import MappingProxyType
 from typing import Any, Callable, Generator, Literal, Protocol, Self, TypeAlias, cast
 
@@ -31,6 +32,7 @@ class SiteFile:
     def __init__(self, tf: Transformer, type: SiteFileType):
         self.tf = tf
         self.type = type
+        self._rendered = False
 
     def __bool__(self) -> bool:
         return self.type != 'none'
@@ -67,7 +69,12 @@ class SiteFile:
         return cls.raw(tf)
 
     def render(self) -> WriteablePath:
+        self._rendered = True
         return self.tf.transform()
+
+    @property
+    def rendered(self) -> bool:
+        return self._rendered
 
     @property
     def source(self) -> ReadablePath:
@@ -159,6 +166,7 @@ class SiteFileManager(Iterable[SiteFile]):
         type_ordering: Iterable[SiteFileType] = ('post', 'page', 'raw', 'meta')
         for file_type in type_ordering:
             yield from self._file_processor.type_map.get(file_type, ())
+
 
 
 class PostCollection:
@@ -299,33 +307,39 @@ class FileProcessor(Iterable[SiteFile]):
         if not isinstance(page_defaults, ChainMap):
             page_defaults = ChainMap(page_defaults)
         self.defaults = page_defaults
+
+        self._files = {}
+        self._tag_map = {}
+        self._type_map = {}
+        self._collections = {}
+        self._buffer_lock = threading.Lock()
         self._generator = self._process()
         next(self._generator)
 
     def _process(self) -> Generator[None, SiteFile, None]:
         self._buffer = []
-        self._files = {}
-        self._tag_map = {}
-        self._type_map = {}
-        self._collections = {}
         while True:
             site_file = yield
-            if existing := self._files.get(site_file.source, SiteFile.none()):
-                self._type_map.get(existing.type, set()).discard(existing)
-                with contextlib.suppress(ValueError):
-                    self._buffer.remove(existing)
-                if collection := existing.collection:
-                    self._collections.get(collection, set()).discard(existing)
-            self._buffer.append(site_file)
-            self._files[site_file.source] = site_file
-            self._type_map.setdefault(site_file.type, set()).add(site_file)
-            if site_file.type == 'post':
-                if collection := site_file.collection:
-                    self._collections.setdefault(collection, set()).add(site_file)
-                for tag in existing.tags:
-                    self._tag_map.setdefault(tag, set()).discard(existing)
-                for tag in site_file.tags:
-                    self._tag_map.setdefault(tag, set()).add(site_file)
+            with self._buffer_lock:
+                self._buffer.append(site_file)
+
+    def _update_model(self, site_file: SiteFile) -> None:
+        if existing := self._files.get(site_file.source, SiteFile.none()):
+            self._type_map.get(existing.type, set()).discard(existing)
+            with contextlib.suppress(ValueError):
+                self._buffer.remove(existing)
+            if collection := existing.collection:
+                self._collections.get(collection, set()).discard(existing)
+        self._buffer.append(site_file)
+        self._files[site_file.source] = site_file
+        self._type_map.setdefault(site_file.type, set()).add(site_file)
+        if site_file.type == 'post':
+            if collection := site_file.collection:
+                self._collections.setdefault(collection, set()).add(site_file)
+            for tag in existing.tags:
+                self._tag_map.setdefault(tag, set()).discard(existing)
+            for tag in site_file.tags:
+                self._tag_map.setdefault(tag, set()).add(site_file)
 
     def __iter__(self) -> Iterator[SiteFile]:
         yield from self.files
@@ -347,8 +361,11 @@ class FileProcessor(Iterable[SiteFile]):
     def _process_files(self) -> Collection[SiteFile]:
         """Processes any new files, returning the current collection"""
         def new_files() -> Iterable[SiteFile]:
-            yield from self._buffer
-            self._buffer.clear()
+            with self._buffer_lock:
+                for site_file in self._buffer:
+                    self._update_model(site_file)
+                    yield site_file
+                self._buffer.clear()
         if len([*new_files()]) > 0:
             self._cache = [*self.generate_files()]
         return self._cache

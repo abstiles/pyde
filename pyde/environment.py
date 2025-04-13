@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses
 import re
 import shutil
+import time
+from collections.abc import Collection
 from functools import partial
 from glob import glob
 from itertools import islice
@@ -18,7 +20,8 @@ from .plugins import PluginManager
 from .site import NullPaginator, Paginator, SiteFileManager
 from .templates import TemplateManager
 from .transformer import CopyTransformer, MarkdownTransformer, Transformer
-from .utils import flatmap
+from .utils import Maybe, flatmap
+from .watcher import SourceWatcher
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -98,7 +101,8 @@ class Environment:
     def site(self) -> SiteFileManager:
         if self._site_loaded:
             return self._site
-        self.process_files(map(LocalPath, self.source_files()))
+        for path in map(LocalPath, self.source_files()):
+            self.process_file(path)
         self._site_loaded = True
         return self._site
 
@@ -106,9 +110,7 @@ class Environment:
         self.output_dir.mkdir(exist_ok=True)
         # Check to see what already exists in the output directory.
         existing_files = set(self.output_dir.rglob('*'))
-        built_files = (
-            file.render() for file in self.site
-        )
+        built_files = (file.render() for file in self.site)
         # Grab the output files and all the parent directories that might have
         # been created as part of the build.
         outputs = flatmap(file_and_parents(upto=self.output_dir), built_files)
@@ -121,19 +123,57 @@ class Environment:
             else:
                 file.unlink(missing_ok=True)
 
-    def source_files(self) -> Iterable[LocalPath]:
-        globber = partial(iterglob, root=self.root)
+    def watch(self) -> None:
+        self.output_dir.mkdir(exist_ok=True)
+        existing_files = set(self.output_dir.rglob('*'))
+        class SiteUpdater:
+            @staticmethod
+            def update(path: LocalPath) -> None:
+                self.process_file(path)
+            @staticmethod
+            def delete(*_: LocalPath) -> None: ...
+
+        with SourceWatcher(
+            self.root,
+            excluded=self._excluded_paths(),
+            included=self.config.include
+        ) as watcher:
+            watcher.register(SiteUpdater)
+            while True:
+                for file in self.site:
+                    try:
+                        outputs = file_and_parents(file.render(), upto=self.output_dir)
+                        for built_file in outputs:
+                            existing_files.discard(built_file)
+                    except FileNotFoundError:
+                        # The file got deleted before we could process it.
+                        # That's fine. Just ignore and move on.
+                        pass
+                for path in existing_files:
+                    print(f'Removing: {path}')
+                    if path.is_dir():
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        path.unlink(missing_ok=True)
+                existing_files.clear()
+                time.sleep(1)
+
+    def _excluded_paths(self) -> Collection[Path | str]:
         exclude_patterns = set(filter(_not_none, [
             self.config.output_dir,
             self.config.layouts_dir,
             self.config.includes_dir,
             self.config.plugins_dir,
-            self.config.config_file,
+            *Maybe(self.config.config_file),
             *self.config.exclude,
         ]))
         if not self.config.drafts:
             exclude_patterns.add(self.config.drafts_dir)
-        excluded = set(flatmap(globber, exclude_patterns))
+        return exclude_patterns
+
+    def source_files(self) -> Iterable[LocalPath]:
+        globber = partial(iterglob, root=self.root)
+        excluded = set(flatmap(globber, self._excluded_paths()))
         excluded_dirs = set(filter(LocalPath.is_dir, excluded))
         included = set(flatmap(globber, self.config.include))
         files = set(flatmap(globber, set(['**'])))
@@ -158,8 +198,8 @@ class Environment:
                 return True
         return False
 
-    def process_files(self, sources: Iterable[LocalPath]) -> None:
-        for source in sources:
+    def process_file(self, source: LocalPath) -> None:
+        try:
             if not self.should_transform(source):
                 self._site.append(
                     CopyTransformer(
@@ -167,7 +207,7 @@ class Environment:
                     ).preprocess(source, self.root, self.output_dir),
                     'raw',
                 )
-                continue
+                return
 
             values = self.global_defaults.new_child(self.get_default_values(source))
             tf = Transformer(source, **values).preprocess(
@@ -178,6 +218,10 @@ class Environment:
             template = self.template_manager.get_template(template_name)
 
             self._site.append(tf.pipe(template=template))
+        except FileNotFoundError:
+            # If a file is deleted before we can process it, that's fine. We
+            # should just move on without making a fuss.
+            pass
 
     def _collection_paginator(self) -> Paginator:
         pagination = self.config.paginate
