@@ -471,3 +471,22 @@ def batched(iterable: Iterable[T], n: int) -> Iterable[Sequence[T]]:
     iterator = iter(iterable)
     while batch := tuple(islice(iterator, n)):
         yield batch
+
+
+class NullMapping(Mapping[Any, Any]):
+    def __len__(self) -> int:
+        return 0
+    def __iter__(self) -> Iterator[Any]:
+        return iter(())
+    def __getitem__(self, key: Any) -> Any:
+        raise KeyError(key)
+
+
+TO_FORMAT_STR_RE = re.compile(r':(\w+)')
+def format_permalink(
+    permalink: str,
+    values: Mapping[str, str]=NullMapping(),
+    **kwargs: str,
+) -> str:
+    fmt = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
+    return fmt.format(**{**values, **kwargs})

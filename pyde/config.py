@@ -61,7 +61,7 @@ class TagSpec:
 class CollectionSpec:
     name: str
     source_dir: Path | str = '_:collection'
-    permalink: str = '/:collection/:path/:basename'
+    permalink: str = '/:collection/:basename'
 
     @property
     def source(self) -> Path:

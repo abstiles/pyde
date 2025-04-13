@@ -16,7 +16,7 @@ from jinja2 import Template
 from .data import Data
 from .path import ReadablePath, UrlPath, VirtualPath, WriteablePath
 from .transformer import CopyTransformer, Transformer
-from .utils import CaseInsensitiveStr, Maybe, batched, slugify
+from .utils import CaseInsensitiveStr, Maybe, batched, format_permalink, slugify
 
 SiteFileType: TypeAlias = Literal['post', 'page', 'raw', 'meta', 'none']
 
@@ -236,7 +236,6 @@ class Paginator:
         if len(sources) < max(1, self.minimum):
             return []
         sources = sorted(sources, key=lambda s: self.key(s.metadata), reverse=True)
-        source_dir = sources[0].source.parent
         if self.maximum > 0:
             total_pages = ceil(len(sources) / self.maximum)
             paginations = iter(batched(sources, self.maximum))
@@ -254,9 +253,20 @@ class Paginator:
         else:
             permalink = self.permalink
         pages: list[SiteFile] = []
-        for idx, page_posts in enumerate(paginations):
+        for idx, page_posts in enumerate(paginations, start=0 if index else 1):
             title = f'{name.title()} Page {idx}' if idx else name.title()
-            source = VirtualPath(source_dir / 'page.html')
+            basename = (
+                index if (index and idx == 0) else f'page{idx}'
+            )
+            collection_dir = format_permalink(
+                self.permalink,
+                num=str(idx),
+                collection=name,
+                tag=basename,
+                basename=basename,
+                name=basename,
+            )
+            source = VirtualPath(collection_dir + '.html').relative_to('/')
             values = metadata.new_child({
                 'title': title,
                 'permalink': permalink,

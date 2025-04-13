@@ -24,6 +24,7 @@ from .templates import TemplateManager
 from .transformer import CopyTransformer, MarkdownTransformer, Transformer
 from .utils import Maybe, flatmap
 from .watcher import SourceWatcher
+from .userlogging import AnimateLoader
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -132,9 +133,11 @@ class Environment:
 
     def watch(self) -> None:
         self.build()
+        loading_widget = AnimateLoader('Processing...', end='Watching')
         class SiteUpdater:
             @staticmethod
             def update(path: LocalPath) -> None:
+                loading_widget.start()
                 self.process_file(path)
             @staticmethod
             def delete(*_: LocalPath) -> None: ...
@@ -147,11 +150,24 @@ class Environment:
         watcher.register(SiteUpdater).start()
         while True:
             try:
+                errors: list[str] = []
                 for file in self.site:
-                    # It's fine if the file gets deleted before we can process it.
-                    # Nothing else to do but ignore and move on.
-                    with contextlib.suppress(FileNotFoundError):
+                    try:
+                        if not file.rendered:
+                            loading_widget.start()
                         file.render()
+                    except FileNotFoundError:
+                        # It's fine if the file gets deleted before we can
+                        # process it. Nothing to do but ignore it.
+                        pass
+                    except Exception as exc:
+                        if file.type != 'meta':
+                            errors.append(f'Error processing {file.source} - {exc}')
+                loading_widget.stop()
+                if errors:
+                    print()
+                for error in errors:
+                    print(error)
                 time.sleep(1)
             except KeyboardInterrupt:
                 print('\nStopping.')

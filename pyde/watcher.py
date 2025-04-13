@@ -106,8 +106,8 @@ class SourceWatcher(FileSystemEventHandler):
     def delete(self, path: str | bytes) -> None:
         if isinstance(path, bytes):
             path = path.decode(errors='ignore')
-        relative_path = Path(path).relative_to(self._source_dir)
-        print(f'Delete {relative_path!r}')
+        relative_path = LocalPath(path).relative_to(self._source_dir)
+        self._listener.delete(relative_path)
 
     def matches(self, path: str | bytes) -> bool:
         return (

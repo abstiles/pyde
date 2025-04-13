@@ -38,10 +38,9 @@ from .path import (
     dest,
     source,
 )
-from .utils import Maybe, ilen, merge_dicts
+from .utils import Maybe, ilen, merge_dicts, format_permalink
 from .yaml import parse_yaml_dict
 
-TO_FORMAT_STR_RE = re.compile(r':(\w+)')
 DEFAULT_PERMALINK = '/:path/:name'
 UNSET: Any = object()
 
@@ -447,7 +446,6 @@ class CopyTransformer(BaseTransformer):
     ):
         super().__init__(src_path, **meta)
         self._permalink = permalink
-        self._permalink = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
         self._collection_root = source(collection_root)
         if collection_root not in self.source.parents:
             # This state indicates the path has already been generated,
@@ -507,7 +505,7 @@ class CopyTransformer(BaseTransformer):
         }
 
         try:
-            result = self._permalink.format(**{**self.metadata, **path_components})
+            result = format_permalink(self._permalink, {**self.metadata, **path_components})
             if as_filename:
                 if not result.endswith(path.suffix):
                     result += path.suffix
