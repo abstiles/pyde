@@ -17,6 +17,11 @@ def main() -> int:
     prog, *args = sys.argv
     parser = argparse.ArgumentParser(prog=Path(prog).name)
 
+    common_args = argparse.ArgumentParser(add_help=False)
+    common_args.add_argument(
+        '--serve', action='store_true', help='Serve the site'
+    )
+
     config_settings = argparse.ArgumentParser(add_help=False)
     config_settings.add_argument(
         '--drafts', action='store_true', help='Render drafts'
@@ -30,13 +35,13 @@ def main() -> int:
     subparsers.required = True
 
     build_parser = subparsers.add_parser(
-        'build', help='Build your site', parents=[config_settings],
+        'build', help='Build your site', parents=[config_settings, common_args],
     )
     build_parser.set_defaults(func=build)
 
     build_parser = subparsers.add_parser(
         'watch', help='Build your site and watch for changes',
-        parents=[config_settings],
+        parents=[config_settings, common_args],
     )
     build_parser.set_defaults(func=watch)
 
@@ -63,14 +68,14 @@ def main() -> int:
 def build(opts: argparse.Namespace) -> int:
     """Build the site"""
     config = get_config(opts)
-    Pyde(config).build()
+    Pyde(config).build(serve=opts.serve)
     return 0
 
 
 def watch(opts: argparse.Namespace) -> int:
     """Build the site and watch"""
     config = get_config(opts)
-    Pyde(config).watch()
+    Pyde(config).watch(serve=opts.serve)
     return 0
 
 

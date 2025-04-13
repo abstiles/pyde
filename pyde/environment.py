@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-import contextlib
 import dataclasses
-from datetime import datetime
 import re
 import shutil
 import time
 from collections.abc import Collection
+from datetime import datetime
 from functools import partial
 from glob import glob
+from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from os import PathLike
 from pathlib import Path
+from threading import Thread
 from typing import Any, Callable, ChainMap, Iterable, TypeGuard, TypeVar, overload
 
 from .config import Config
@@ -22,9 +23,9 @@ from .plugins import PluginManager
 from .site import NullPaginator, Paginator, SiteFileManager
 from .templates import TemplateManager
 from .transformer import CopyTransformer, MarkdownTransformer, Transformer
+from .userlogging import AnimateLoader
 from .utils import Maybe, flatmap
 from .watcher import SourceWatcher
-from .userlogging import AnimateLoader
 
 T = TypeVar('T')
 HEADER_RE = re.compile(b'^---\r?\n')
@@ -109,7 +110,21 @@ class Environment:
         self._site_loaded = True
         return self._site
 
-    def build(self) -> None:
+    def spawn_http_server(self) -> HTTPServer:
+        serve_dir = str(self.output_dir)
+        class Handler(SimpleHTTPRequestHandler):
+            def __init__(self, *args: Any, **kwargs: Any):
+                super().__init__(*args, directory=serve_dir, **kwargs)
+
+        address, port = '', 8000
+        httpd = ThreadingHTTPServer((address, port), Handler)
+        thread = Thread(target=httpd.serve_forever)
+        thread.daemon = True
+        thread.start()
+        print(f'Started HTTP Server on {address}:{port}')
+        return httpd
+
+    def build(self, serve: bool=False) -> None:
         print(f'Building contents of {self.root}...')
         start = datetime.now()
         self.output_dir.mkdir(exist_ok=True)
@@ -130,10 +145,19 @@ class Environment:
                 file.unlink(missing_ok=True)
         end = datetime.now()
         print(f'Done in {(end - start).total_seconds():.2f}s')
+        if serve:
+            server = self.spawn_http_server()
+            while True:
+                try:
+                    time.sleep(10)
+                except KeyboardInterrupt:
+                    server.server_close()
+                    break
 
-    def watch(self) -> None:
+    def watch(self, serve: bool=False) -> None:
         self.build()
-        loading_widget = AnimateLoader('Processing...', end='Watching')
+        server = self.spawn_http_server() if serve else None
+        loading_widget = AnimateLoader('Processing...', end='')
         class SiteUpdater:
             @staticmethod
             def update(path: LocalPath) -> None:
@@ -171,6 +195,8 @@ class Environment:
                 time.sleep(1)
             except KeyboardInterrupt:
                 print('\nStopping.')
+                if server:
+                    server.server_close()
                 break
 
     def _excluded_paths(self) -> Collection[Path | str]:
