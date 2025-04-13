@@ -88,28 +88,31 @@ class SourceWatcher(FileSystemEventHandler):
         self._observer = None
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        if event.event_type == EVENT_TYPE_MOVED and self.matches(event.dest_path):
-            self.update(event.dest_path)
-        if not self.matches(event.src_path):
+        if (
+            event.event_type == EVENT_TYPE_MOVED
+            and self.matches(dest := self._to_path(event.dest_path))
+        ):
+            self.update(dest)
+        src = self._to_path(event.src_path)
+        if not self.matches(src):
             return
         if event.event_type in (EVENT_TYPE_CREATED, EVENT_TYPE_MODIFIED):
-            self.update(event.src_path)
+            self.update(src)
         elif event.event_type in (EVENT_TYPE_MOVED, EVENT_TYPE_DELETED):
-            self.delete(event.src_path)
+            self.delete(src)
 
-    def update(self, path: str | bytes) -> None:
-        if isinstance(path, bytes):
-            path = path.decode(errors='ignore')
-        relative_path = LocalPath(path).relative_to(self._source_dir)
-        self._listener.update(relative_path)
+    def _to_path(self, path_str: str | bytes) -> LocalPath:
+        if isinstance(path_str, bytes):
+            path_str = path_str.decode(errors='ignore')
+        return LocalPath(path_str).absolute().relative_to(self._source_dir)
 
-    def delete(self, path: str | bytes) -> None:
-        if isinstance(path, bytes):
-            path = path.decode(errors='ignore')
-        relative_path = LocalPath(path).relative_to(self._source_dir)
-        self._listener.delete(relative_path)
+    def update(self, path: LocalPath) -> None:
+        self._listener.update(path)
 
-    def matches(self, path: str | bytes) -> bool:
+    def delete(self, path: LocalPath) -> None:
+        self._listener.delete(path)
+
+    def matches(self, path: LocalPath) -> bool:
         return (
             any(include.match(path) for include in self._included)
             or not any(exclude.match(path) for exclude in self._excluded)

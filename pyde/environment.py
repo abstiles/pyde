@@ -326,7 +326,10 @@ def iterglob(
         include_hidden=include_hidden,
     )
     for path in all_matching:
-        yield root / str(path)
+        match = root / str(path)
+        yield match
+        if match.is_dir():
+            yield from map(LocalPath, match.glob('**/*'))
 
 
 F = TypeVar('F', bound=FilePath)
