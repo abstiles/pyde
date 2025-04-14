@@ -15,6 +15,8 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, Callable, ChainMap, Iterable, TypeGuard, TypeVar, overload
 
+from pyde.livereload import LiveReloadServer
+
 from .config import Config
 from .data import Data
 from .markdown.handler import MarkdownParser
@@ -22,7 +24,12 @@ from .path import FilePath, LocalPath
 from .plugins import PluginManager
 from .site import NullPaginator, Paginator, SiteFileManager
 from .templates import TemplateManager
-from .transformer import CopyTransformer, MarkdownTransformer, Transformer
+from .transformer import (
+    CopyTransformer,
+    MarkdownTransformer,
+    TextTransformer,
+    Transformer,
+)
 from .userlogging import AnimateLoader
 from .utils import Maybe, flatmap
 from .watcher import SourceWatcher
@@ -155,6 +162,13 @@ class Environment:
                     break
 
     def watch(self, serve: bool=False) -> None:
+        reloader = LiveReloadServer().start()
+        class ReloadTransformer(
+            TextTransformer, pattern='*.html',
+        ):  # pylint: disable=unused-variable
+            """Append the reloader script to all HTML files"""
+            def transform_text(self, text: str) -> str:
+                return text + reloader.client_js()
         self.build()
         server = self.spawn_http_server() if serve else None
         loading_widget = AnimateLoader('Processing...', end='')
@@ -173,11 +187,13 @@ class Environment:
         )
         watcher.register(SiteUpdater).start()
         while True:
+            updated = False
             try:
                 errors: list[str] = []
                 for file in self.site:
                     try:
                         if not file.rendered:
+                            updated = True
                             loading_widget.start()
                         file.render()
                     except FileNotFoundError:
@@ -188,6 +204,9 @@ class Environment:
                         if file.type != 'meta':
                             errors.append(f'Error processing {file.source} - {exc}')
                 loading_widget.stop()
+                if updated:
+                    updated = False
+                    reloader.reload()
                 if errors:
                     print()
                 for error in errors:
@@ -197,6 +216,7 @@ class Environment:
                 print('\nStopping.')
                 if server:
                     server.server_close()
+                    reloader.stop()
                 break
 
     def _excluded_paths(self) -> Collection[Path | str]:
