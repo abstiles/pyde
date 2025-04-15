@@ -122,6 +122,14 @@ class Environment:
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args: Any, **kwargs: Any):
                 super().__init__(*args, directory=serve_dir, **kwargs)
+            def translate_path(self, path: str) -> str:
+                path = super().translate_path(path)
+                if (
+                    not (local_path := LocalPath(path)).suffix
+                    and (html_path := local_path.with_suffix('.html')).exists()
+                ):
+                    return str(html_path)
+                return path
 
         address, port = '', 8000
         httpd = ThreadingHTTPServer((address, port), Handler)
