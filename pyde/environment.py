@@ -122,6 +122,11 @@ class Environment:
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args: Any, **kwargs: Any):
                 super().__init__(*args, directory=serve_dir, **kwargs)
+            def do_GET(self) -> None:
+                try:
+                    super().do_GET()
+                except BrokenPipeError:
+                    pass
             def translate_path(self, path: str) -> str:
                 path = super().translate_path(path)
                 if (
