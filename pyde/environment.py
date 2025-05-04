@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import partial
 from glob import glob
 from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
-from itertools import islice
+from itertools import chain, islice
 from os import PathLike
 from pathlib import Path
 from threading import Thread
@@ -22,7 +22,7 @@ from .data import Data
 from .markdown.handler import MarkdownParser
 from .path import FilePath, LocalPath
 from .plugins import PluginManager
-from .site import NullPaginator, Paginator, SiteFileManager
+from .site import NullPaginator, Paginator, SiteFile, SiteFileManager
 from .templates import TemplateManager
 from .transformer import (
     CopyTransformer,
@@ -49,28 +49,42 @@ class Environment:
             "permalink": config.permalink,
             "layout": "default",
             "site_url": self.config.url,
+            "site_name": self.config.name,
         })
 
-        pyde = Data(
+        self.pyde_data = Data(
             environment='development' if config.drafts else 'production',
             env=self,
             **dataclasses.asdict(config)
         )
-        self.template_manager = TemplateManager(
-            self.includes_dir, self.layouts_dir,
-            globals={'pyde': pyde, 'jekyll': pyde},
-        )
         self._site_loaded = False
+        self.template_manager = self.create_template_manager()
         self._site = SiteFileManager(
             tag_paginator=self._tag_paginator(),
             collection_paginator=self._collection_paginator(),
             page_defaults=self.global_defaults,
         )
-        self._site.data.url = self.config.url
         self.template_manager.globals['site'] = self._site
-        self.global_defaults["metaprocessor"] = self.template_manager.render
+        self._site.data.url = self.config.url
+        self._site.data.name = self.config.name
 
         PluginManager(self.plugins_dir).import_plugins(self)
+
+    def create_template_manager(self) -> TemplateManager:
+        template_manager = TemplateManager(
+            self.includes_dir, self.layouts_dir,
+            globals={
+                'pyde': self.pyde_data,
+                'jekyll': self.pyde_data,
+            },
+        )
+        self.global_defaults["metaprocessor"] = template_manager.render
+        return template_manager
+
+    def restart_template_manager(self) -> None:
+        self.template_manager = self.create_template_manager()
+        self.template_manager.globals['site'] = self._site
+        self.global_defaults["metaprocessor"] = self.template_manager.render
 
     @property
     def markdown_parser(self) -> MarkdownParser:
@@ -181,6 +195,7 @@ class Environment:
         ):  # pylint: disable=unused-variable
             """Append the reloader script to all HTML files"""
             def transform_text(self, text: str) -> str:
+                path = self.metadata['file']
                 return text + reloader.client_js()
         self.build()
         server = self.spawn_http_server() if serve else None
@@ -189,48 +204,68 @@ class Environment:
             @staticmethod
             def update(path: LocalPath) -> None:
                 loading_widget.start()
-                self.process_file(path)
+                try:
+                    if {self.layouts_dir, self.includes_dir} & set(path.parents):
+                        # Restart the template manager to avoid cached templates.
+                        self.restart_template_manager()
+                        for path in map(LocalPath, self.source_files()):
+                            self.process_file(path)
+                    else:
+                        self.process_file(path)
+                except Exception as exc:
+                    print(f'Error processing {path} -', exc)
             @staticmethod
             def delete(*_: LocalPath) -> None: ...
 
         watcher = SourceWatcher(
             self.root,
             excluded=self._excluded_paths(),
-            included=self.config.include
+            included=chain(
+                self.config.include,
+                [self.layouts_dir, self.includes_dir],
+            )
         )
         watcher.register(SiteUpdater).start()
-        while True:
-            updated = False
-            try:
-                errors: list[str] = []
-                for file in self.site:
-                    try:
-                        if not file.rendered:
-                            updated = True
-                            loading_widget.start()
-                        file.render()
-                    except FileNotFoundError:
-                        # It's fine if the file gets deleted before we can
-                        # process it. Nothing to do but ignore it.
-                        pass
-                    except Exception as exc:
-                        if file.type != 'meta':
-                            errors.append(f'Error processing {file.source} - {exc}')
+        try:
+            while True:
+                change_types = set()
+                updates = self._update_changed()
+                for file in updates:
+                    if file.outputs.suffix == '.css':
+                        change_types.add(LiveReloadServer.ReloadType.CSS)
+                    else:
+                        change_types.add(LiveReloadServer.ReloadType.PAGE)
                 loading_widget.stop()
-                if updated:
-                    updated = False
-                    reloader.reload()
-                if errors:
-                    print()
-                for error in errors:
-                    print(error)
-                time.sleep(1)
-            except KeyboardInterrupt:
-                print('\nStopping.')
-                if server:
-                    server.server_close()
-                    reloader.stop()
-                break
+                if change_types:
+                    reloader.reload(*change_types)
+                else:
+                    time.sleep(1)
+        except KeyboardInterrupt:
+            print('\nStopping.')
+            if server:
+                server.server_close()
+                reloader.stop()
+
+    def _update_changed(self) -> Iterable[SiteFile]:
+        updated: list[SiteFile] = []
+        errors: list[str] = []
+        for file in self.site:
+            try:
+                if not file.rendered:
+                    updated.append(file)
+                file.render()
+            except FileNotFoundError:
+                # It's fine if the file gets deleted before we can
+                # process it. Nothing to do but ignore it.
+                pass
+            except Exception as exc:
+                if file.type != 'meta':
+                    errors.append(f'Error processing {file.source} - {exc}')
+        yield from updated
+        if errors:
+            print()
+        for error in errors:
+            print(error)
 
     def _excluded_paths(self) -> Collection[Path | str]:
         exclude_patterns = set(filter(_not_none, [
@@ -362,7 +397,10 @@ def iterglob(
         match = root / str(path)
         yield match
         if match.is_dir():
-            yield from map(LocalPath, match.glob('**/*'))
+            children = match.glob('**/*')
+            if not include_hidden:
+                children = filter(_not_hidden, children)
+            yield from map(LocalPath, children)
 
 
 F = TypeVar('F', bound=FilePath)

@@ -84,7 +84,8 @@ class PaginationSpec:
 class Config:
     """Model of the config values in the config file"""
     config_file: Path | None = None
-    url: UrlPath = UrlPath('/')
+    name: str = 'Website Name'
+    url: UrlPath = UrlPath('http://localhost/')
     root: Path = Path('.')
     drafts: bool = False
     permalink: str = '/:path/:basename'

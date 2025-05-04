@@ -1,101 +1,56 @@
 import asyncio
 from collections.abc import Callable
 from datetime import timedelta
+from enum import auto, Enum
+from functools import cache
 from importlib import resources
+from importlib.abc import Traversable
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Self
 
 from websockets.asyncio.server import Server, ServerConnection, serve
 
-from . import vendored
-
-
 DEFAULT_RETRY_DELAY = timedelta(milliseconds=100)
 DEFAULT_RETRY_COUNT = 30
 
-# The client JS keeps a live websocket connection to the LiveReloadServer,
-# waiting for a signal to reload. The signal itself is simple: any message at
-# all. When we receive a message, fetch the new version of the page and diff
-# it with the old. If the head has changed, reload the page. Otherwise, patch
-# the DOM in place with the changes. If we cannot reconnect within the
-# configured number of retries, we take that as a signal that the watch server
-# is shut down, so we stop retrying.
 
-DIFF_DOM_MODULE = resources.files(vendored) / 'diff-dom' / 'module.js'
-DEPENDS_JS = DIFF_DOM_MODULE.read_text()
-CLIENT_JS = '''
-const dd = new DiffDOM()
-const removeThis = doc => doc.getElementById('pyde-livereload-client').remove();
-removeThis(document);
-const htmlParser = new DOMParser();
-const socketUrl = 'ws://{address}:{port}';
-const retryDelayMilliseconds = {retry_ms};
-const maxAttempts = {retry_count};
-let socket = new WebSocket(socketUrl);
-let connected = false;
-socket.addEventListener('open', () => {{ connected = true; }});
-setTimeout(() => {{
-	if (connected) return;
-	console.error('Failed to connect to livereload service.');
-	socket.onclose = () => null;
-	socket.close();
-}}, retryDelayMilliseconds * maxAttempts);
-let attempts = 0;
-const reloadIfCanConnect = () => {{
-	attempts++;
-	if (attempts > maxAttempts) {{
-		console.error('Could not reconnect to dev server.');
-		return;
-	}}
-	socket = new WebSocket(socketUrl);
-	socket.addEventListener('message', listener);
-	socket.addEventListener('error', () => {{
-		setTimeout(reloadIfCanConnect, retryDelayMilliseconds);
-	}});
-	socket.addEventListener('open', () => {{
-		attempts = 0;
-	}});
-}};
-const listener = async (event) => {{
-	console.log(event.data);
-	await fetch(window.location)
-		.then(response => response.text())
-		.then(update => {{
-			const newPage = htmlParser.parseFromString(update, 'text/html');
-			removeThis(newPage);
-			const newHead = newPage.documentElement.childNodes[0];
-			const oldHead = document.documentElement.childNodes[0];
-			const newBody = newPage.documentElement.childNodes[2];
-			const oldBody = document.documentElement.childNodes[2];
-			const tempNodes = [
-				document.documentElement.appendChild(newHead),
-				document.documentElement.appendChild(newBody),
-			];
-			let diff = dd.diff(oldHead, newHead);
-			if (diff.length > 0) {{
-				console.log("Head changed, doing full page reload.");
-				location.reload();
-			}}
-			dd.apply(oldHead, diff);
-			diff = dd.diff(oldBody, newBody);
-			dd.apply(oldBody, diff);
-			for (const tempNode of tempNodes) {{
-				tempNode.remove();
-			}}
-			reloadIfCanConnect();
-		}}).catch(reason => console.error(reason))
-	;
-}};
-socket.addEventListener('message', listener);
-'''
+@cache
+def js_path() -> Traversable:
+    from . import js  # pylint: disable=all # pyright: ignore
+    return resources.files(js)
+
+
+@cache
+def depends_js() -> str:
+    module = js_path() / 'vendored'/ 'diff-dom' / 'module.js'
+    return module.read_text()
+
+
+# The client JS keeps a live websocket connection to the LiveReloadServer,
+# waiting for a signal to reload. The message sent determines whether to do
+# a full reload, a refresh of the CSS, or a patched update of the DOM.
+# When the client receives a "page" message, it fetches the new version of the
+# page and diff it with the old. If the head has changed, reload the page.
+# Otherwise, patch the DOM in place with the changes. If we cannot reconnect
+# within the configured number of retries, we take that as a signal that the
+# watch server is shut down, so we stop retrying.
+def client_js() -> str:
+    module = js_path() / 'reload-client.js'
+    return module.read_text()
+
+
+async def deliver_messages(connection: ServerConnection, messages: list[str]) -> None:
+    for message in messages:
+        await connection.send(message)
+    await connection.close()
 
 
 def reload_listener(server: Server, recv_port: Connection) -> Callable[[], None]:
     def send_reload_message() -> None:
-        message = recv_port.recv_bytes().decode('utf-8')
+        reload_types = recv_port.recv_bytes().decode('utf-8').split(',')
         for connection in server.connections:
-            asyncio.create_task(connection.send(message))
+            asyncio.create_task(deliver_messages(connection, reload_types))
     return send_reload_message
 
 
@@ -111,16 +66,18 @@ def launch(
 
 
 class LiveReloadServer:
+    """A simple websocket server that sends reload messages"""
+
     _send_port: Connection
 
-    """
-    A simple websocket server that ignores messages
+    class ReloadType(Enum):
+        @staticmethod
+        def _generate_next_value_(name: str, *_: object, **__: object) -> bytes:
+            return name.lower().encode('utf-8')
+        FULL = auto()
+        PAGE = auto()
+        CSS = auto()
 
-    This is useful to send a very simple signal to a client by strategically
-    disconnecting. When the server process dies, the client Javascript attempts
-    to reconnect, and upon reconnecting, it reloads the page. The reload method
-    of this class simply terminates the existing server and starts a new one.
-    """
     def __init__(
         self,
         address: str='',
@@ -137,8 +94,8 @@ class LiveReloadServer:
     def client_js(self) -> str:
         return (
             '<script id="pyde-livereload-client" type="module">'
-            + DEPENDS_JS
-            + CLIENT_JS.format(
+            + depends_js()
+            + client_js().format(
                 address=self._address or 'localhost',
                 port=str(self._port),
                 retry_ms=self._retry_ms,
@@ -173,7 +130,14 @@ class LiveReloadServer:
             self._process.terminate()
             self._process = None
 
-    def reload(self) -> None:
-        if self._process:
-            # Any message at all functions as the reload signal.
-            self._send_port.send_bytes(b'Reloading...')
+    def reload(self, *types: ReloadType) -> None:
+        if not self._process:
+            return
+        selected = set(types)
+        if not selected:
+            type = self.ReloadType.PAGE.value
+        elif self.ReloadType.FULL in selected:
+            type = self.ReloadType.FULL.value
+        else:
+            type = b','.join(t.value for t in selected)
+        self._send_port.send_bytes(type)

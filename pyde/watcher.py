@@ -1,5 +1,5 @@
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import Any, Protocol, Self
 
@@ -43,8 +43,8 @@ class SourceWatcher(FileSystemEventHandler):
         self,
         source_dir: LocalPath | Path | str,
         *,
-        excluded: Collection[LocalPath | Path | str],
-        included: Collection[LocalPath | Path | str],
+        excluded: Iterable[LocalPath | Path | str],
+        included: Iterable[LocalPath | Path | str],
     ):
         if not isinstance(source_dir, LocalPath):
             source_dir = LocalPath(source_dir)

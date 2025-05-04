@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		{%- block head %}
+		<title>{{ page.title | default(site.name) }}</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta charset="UTF-8">
+		{%- endblock %}
+	</head>
+	<body>
+		<header>
+			{%- block header %}
+			<a id="header-site-root-link" href="{{ site.url }}">{{ site.name }}</a>
+			{%- endblock %}
+		</header>
+		<main>
+			{%- block main %}
+			{{ content }}
+			{%- endblock %}
+		</main>
+		{%- set footer_contents %}{% block footer %}{% endblock %}{% endset %}
+		{%- if footer_contents %}
+		<footer>{{ footer_contents }}</footer>
+		{%- endif %}
+	</body>
+</html>
