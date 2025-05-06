@@ -1,4 +1,9 @@
-.PHONY: depends
+.PHONY: depends package
+
+PACKAGE := pyde-ssg
+
+package:
+	python -m build
 
 depends:
 	mkdir -p _build/diff-dom
