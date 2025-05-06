@@ -16,8 +16,8 @@ from .extensions.pm_attr_list import PMAttrListExtension
 
 def default_extensions() -> list[Extension | str]:
     return [
-        'md_in_html', 'smarty', 'sane_lists', PMAttrListExtension(),
-        BlockQuoteExtension(),
+        'md_in_html', 'smarty', 'sane_lists', 'footnotes',
+        PMAttrListExtension(), BlockQuoteExtension(),
     ]
 
 
