@@ -159,7 +159,10 @@ class Environment:
         return httpd
 
     def build(self, serve: bool=False) -> None:
-        print(f'Building contents of {self.root}...')
+        if str(self.root) == '.':
+            print('Building contents...')
+        else:
+            print(f'Building contents of {self.root}...')
         start = datetime.now()
         self.output_dir.mkdir(exist_ok=True)
         # Check to see what already exists in the output directory.

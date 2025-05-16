@@ -1,6 +1,6 @@
 [project]
 name = "pyde-ssg"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
     "pyyaml >= 6.0",
     "markdown >= 3.7",

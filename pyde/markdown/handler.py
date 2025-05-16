@@ -110,7 +110,7 @@ class MarkdownParser:
 
     def parse(self, markdown: str) -> str:
         preprocessed_md = self.preprocess(markdown)
-        processed_html = self.parser.convert(preprocessed_md)
+        processed_html = self.parser.reset().convert(preprocessed_md)
         return HTMLCleaner.clean(processed_html)
 
     @staticmethod
