@@ -4,10 +4,13 @@ CLI interface to pyde
 
 import argparse
 import sys
+import os
+from datetime import date
 from pathlib import Path
 from typing import cast
 
 from pyde.environment import Environment as Pyde
+from pyde.utils import slugify
 
 from .config import Config
 
@@ -57,6 +60,19 @@ def main() -> int:
     )
     generate_cmd_parser.set_defaults(func=generate)
 
+    draft_cmd_parser = subparsers.add_parser(
+        'draft', parents=[config_settings],
+        help='Start a new draft',
+    )
+    draft_cmd_parser.set_defaults(func=draft)
+    draft_cmd_parser.add_argument(
+        '--title', '-t', help='Title for the new draft',
+    )
+    draft_cmd_parser.add_argument(
+        '--no-edit', dest='edit', action='store_false',
+        help='Do not launch $EDITOR',
+    )
+
     opts = parser.parse_args(args)
     status = opts.func(opts)
     try:
@@ -76,6 +92,26 @@ def watch(opts: argparse.Namespace) -> int:
     """Build the site and watch"""
     config = get_config(opts)
     Pyde(config).watch(serve=opts.serve)
+    return 0
+
+
+def draft(opts: argparse.Namespace) -> int:
+    config = get_config(opts)
+    config.drafts_dir.mkdir(parents=True, exist_ok=True)
+    today = date.today().isoformat()
+    title = opts.title if opts.title else f'Untitled {today}'
+    filename = slugify(title) + '.md'
+    # Ensure we don't override an existing file by adding a 1-based index if
+    # a file with the given title already exists.
+    idx = 1
+    while (draft_file := config.drafts_dir / filename).exists():
+        idx += 1
+        filename = slugify(f'{title}') + f'.{idx}.md'
+    draft_file.write_text(f'---\ntitle: {title}\ndate: {today}\ntags:\n---\n')
+    if opts.edit:
+        # And after all, why shouldn't I default this to vim?
+        editor = os.environ.get('EDITOR', 'vim')
+        os.execlp(editor, editor, str(draft_file))
     return 0
 
 
