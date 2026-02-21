@@ -87,6 +87,9 @@ class VirtualPath(WriteablePath):
     def __rtruediv__(self, key: Path | PydePath) -> Self:
         return self._with_path(str(key)) / self._path
 
+    def __add__(self, key: Path | PydePath) -> Self:
+        return self._with_path(str(self._path) + str(key))
+
     def read_bytes(self) -> bytes:
         return self._content
 

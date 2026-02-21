@@ -187,6 +187,9 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
             url_path = UrlPath(str(new_path))
         return self.navigate(url_path.absolute())
 
+    def __add__(self, postfix: PathType) -> UrlPath:
+        return UrlPath(str(self) + str(postfix))
+
     def match(self, path_pattern: str) -> bool:
         return self._path.match(path_pattern)
 

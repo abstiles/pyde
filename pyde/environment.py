@@ -143,9 +143,12 @@ class Environment:
                     pass
             def translate_path(self, path: str) -> str:
                 path = super().translate_path(path)
+                local_path = LocalPath(path)
+                if local_path.exists():
+                    return path
                 if (
-                    not (local_path := LocalPath(path)).suffix
-                    and (html_path := local_path.with_suffix('.html')).exists()
+                    (html_path := local_path.with_suffix('.html')).exists()
+                    or (html_path := local_path + '.html').exists()
                 ):
                     return str(html_path)
                 return path

@@ -24,6 +24,7 @@ class FilePath(Protocol):
     def __eq__(self, other: object, /) -> bool: ...
     def __truediv__(self, key: Path | PydePath) -> FilePath: ...
     def __rtruediv__(self, key: Path | PydePath) -> FilePath: ...
+    def __add__(self, key: Path | PydePath) -> FilePath: ...
 
     @property
     def name(self) -> str: ...
@@ -137,6 +138,19 @@ class LocalPath(WriteablePath, os.PathLike[str]):
     def __rtruediv__(self, key: Path | PydePath) -> WriteablePath:
         return self.__class__(str(key) / self._path)
 
+    @overload
+    def __add__(self, key: str | Path | LocalPath) -> LocalPath: ...
+    @overload
+    def __add__(self, key: Path | PydePath) -> WriteablePath: ...
+    def __add__(self, key: Path | PydePath) -> WriteablePath:
+        if isinstance(key, (str, Path, LocalPath)):
+            return self.__class__(str(self._path) + str(key))
+        # If not one of the above, the other object should be a FilePath, and
+        # probably one that implements some special behavior (like VirtualPath).
+        # This method returns NotImplemented so that the __radd__
+        # implmentation on the other object can handle its own special behavior.
+        return NotImplemented
+
     def read_bytes(self) -> bytes:
         return self._path.read_bytes()
 
@@ -200,13 +214,3 @@ class LocalPath(WriteablePath, os.PathLike[str]):
             # 1.8446744073709552e+19 and I have no idea why. At least ctime
             # seems fine?
             return datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
-
-
-if TYPE_CHECKING:
-    # Because the type checkers don't provide a nice way to declare that
-    # LocalPath proxies its Path instance with getattr, let's create the
-    # polite fiction that it inherits from Path.
-    class _LocalPath(LocalPath, Path):  # type: ignore # pylint: disable=all
-        def __new__(cls, path: Path | PydePath) -> Self: ...
-        def __init__(self, path: Path | PydePath): ...
-    LocalPath = _LocalPath  # type: ignore
