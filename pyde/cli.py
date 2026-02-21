@@ -23,42 +23,53 @@ def main() -> int:
     prog, *args = sys.argv
     parser = argparse.ArgumentParser(prog=Path(prog).name)
 
-    common_args = argparse.ArgumentParser(add_help=False)
-    common_args.add_argument(
+    project_args = argparse.ArgumentParser(add_help=False)
+    project_args.add_argument(
+        '--root', '-r', metavar='DIR', dest='dir', type=directory,
+        help='Root directory for sources'
+    )
+
+    build_args = argparse.ArgumentParser(add_help=False)
+    build_args.add_argument(
         '--serve', action='store_true', help='Serve the site'
+    )
+    build_args.add_argument(
+        '-d', '--destination', metavar='DIR', type=Path, default='_pysite'
+    )
+    build_args.add_argument(
+        '--drafts', action='store_true', help='Render drafts'
     )
 
     config_settings = argparse.ArgumentParser(add_help=False)
-    config_settings.add_argument(
-        '--drafts', action='store_true', help='Render drafts'
-    )
-    config_settings.add_argument('dir', type=directory, nargs='?')
     config_settings.add_argument('-c', '--config', type=Path, default='_config.yml')
-    config_settings.add_argument(
-        '-d', '--destination', metavar='DIR', type=Path, default='_pysite')
+    config_settings.add_argument('--drafts-dir', type=directory, default='_drafts')
 
     subparsers = parser.add_subparsers(help='command')
     subparsers.required = True
 
     build_parser = subparsers.add_parser(
-        'build', help='Build your site', parents=[config_settings, common_args],
+        'build', help='Build your site', parents=[
+            project_args, config_settings, build_args
+        ],
     )
     build_parser.set_defaults(func=build)
 
     build_parser = subparsers.add_parser(
         'watch', help='Build your site and watch for changes',
-        parents=[config_settings, common_args],
+        parents=[
+            project_args, config_settings, build_args
+        ],
     )
     build_parser.set_defaults(func=watch)
 
     config_cmd_parser = subparsers.add_parser(
-        'config', parents=[config_settings],
+        'config', parents=[project_args, config_settings, build_args],
         help='Print the current configuration, including all defaults',
     )
     config_cmd_parser.set_defaults(func=print_config)
 
     generate_cmd_parser = subparsers.add_parser(
-        'generate', parents=[config_settings],
+        'generate', parents=[project_args, config_settings, build_args],
         help='Generate a basic Pyde skeleton',
     )
     generate_cmd_parser.set_defaults(func=generate)
@@ -69,15 +80,11 @@ def main() -> int:
     )
     draft_cmd_parser.set_defaults(func=draft)
     draft_cmd_parser.add_argument(
-        '--title', '-t', help='Title for the new draft',
+        'title', help='Title for the new draft', nargs='?'
     )
     draft_cmd_parser.add_argument(
         '--no-edit', dest='edit', action='store_false',
         help='Do not launch $EDITOR',
-    )
-    draft_cmd_parser.add_argument(
-        '--list', action='store_true',
-        help='List all drafts',
     )
 
     drafts_cmd_parser = subparsers.add_parser(
@@ -85,6 +92,16 @@ def main() -> int:
         help='List all drafts',
     )
     drafts_cmd_parser.set_defaults(func=list_drafts)
+
+    post_cmd_parser = subparsers.add_parser(
+        'post', parents=[project_args, config_settings],
+        help='Post a draft',
+    )
+    post_cmd_parser.add_argument(
+        'post', metavar='POST', type=Path,
+        help='Draft to post',
+    )
+    post_cmd_parser.set_defaults(func=post)
 
     opts = parser.parse_args(args)
     status = opts.func(opts)
@@ -109,8 +126,6 @@ def watch(opts: argparse.Namespace) -> int:
 
 
 def draft(opts: argparse.Namespace) -> int:
-    if opts.list:
-        return list_drafts(opts)
     config = get_config(opts)
     config.drafts_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -132,26 +147,93 @@ def draft(opts: argparse.Namespace) -> int:
 
 def list_drafts(opts: argparse.Namespace) -> int:
     config = get_config(opts)
-    get_drafts(config.drafts_dir)
+    for path, metadata in get_drafts(config.drafts_dir):
+        print(path)
+        for k, v in metadata.items():
+            print(f'    {k}: {v}')
+    return 0
+
+
+def post(opts: argparse.Namespace) -> int:
+    config = get_config(opts)
+    post: Path
+    if (path := opts.post).exists():
+        post = path
+    elif (path := config.drafts_dir / opts.post).exists():
+        post = path
+    else:
+        print(f'Error: {opts.post} does not exist', file=sys.stderr)
+        return 1
+    draft_data = get_draft_data(post)
+    if not draft_data:
+        print(f'Error: unable to parse metadata for {post}', file=sys.stderr)
+        return 1
+    dest_filename = slugify(str(draft_data['title'])) + '.md'
+    dest_path = config.posts.source / dest_filename
+    if dest_path.exists():
+        print(
+            f'Error: destination {str(dest_path)!r} would be overwritten.',
+            'Change draft title to avoid overwriting existing post.',
+            file=sys.stderr
+        )
+        return 1
+    dest_path.parent.mkdir(exist_ok=True, parents=True)
+    try:
+        frontmatter, body = split_frontmatter(path.read_text())
+        new_date = date.today().isoformat()
+        with dest_path.open('w') as f:
+            print('---', file=f)
+            for line in (frontmatter or '').split('\n'):
+                if line.startswith('date: '):
+                    print(f'date: {new_date}', file=f)
+                else:
+                    print(line, file=f)
+            print('---', file=f)
+            if body:
+                print(body, file=f)
+    except Exception:
+        dest_path.unlink()
+        raise
+    post.unlink()
     return 0
 
 
 def get_drafts(dir: Path) -> Iterable[tuple[Path, Mapping[str, YamlType]]]:
     draft_files = dir.glob('*.md')
     for path in draft_files:
-        frontmatter = split_frontmatter(path.read_text())[0]
-        if frontmatter is not None:
-            yield path, parse_yaml_dict(frontmatter)
+        if (metadata := get_draft_data(path)):
+            yield path, metadata
+
+
+def get_draft_data(path: Path) -> Mapping[str, YamlType] | None:
+    frontmatter = split_frontmatter(path.read_text())[0]
+    if frontmatter is not None:
+        return parse_yaml_dict(frontmatter)
+    return None
 
 
 def get_config(opts: argparse.Namespace, raw: bool=False) -> Config:
     config = Config.parse(opts.config, raw)
-    if opts.dir:
-        config.root = cast(Path, opts.dir)
-    if opts.drafts:
-        config.drafts = True
-    if opts.destination:
-        config.output_dir = cast(Path, opts.destination)
+    try:
+        if opts.dir:
+            config.root = cast(Path, opts.dir)
+    except AttributeError:
+        pass
+    try:
+        if opts.drafts:
+            config.drafts = opts.drafts
+    except AttributeError:
+        pass
+    try:
+        if opts.destination:
+            config.output_dir = cast(Path, opts.destination)
+    except AttributeError:
+        pass
+    try:
+        if opts.drafts_dir:
+            config.drafts_dir = cast(Path, opts.drafts_dir)
+    except AttributeError:
+        pass
     return config
 
 
