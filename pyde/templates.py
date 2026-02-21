@@ -22,6 +22,7 @@ from jinja2 import (
     select_autoescape,
 )
 from jinja2.ext import Extension
+from jinja2.filters import do_striptags
 from jinja2.lexer import Lexer, Token, TokenStream
 from jinja2.runtime import Context, Undefined
 from jinja2.utils import Namespace
@@ -80,6 +81,7 @@ class TemplateManager:
         self.env.filters['relative_url'] = relative_url
         self.env.filters['reverse'] = reverse
         self.env.filters['dictmap'] = dictmap
+        self.env.filters['plaintext'] = plaintext
 
     @property
     def globals(self) -> dict[str, Any]:
@@ -671,3 +673,13 @@ def markdownify(context: Context, md: str) -> str:
         context.resolve('pyde').env.markdown_parser
     )
     return parser.parse(md)
+
+
+PARA_TAG_RE = re.compile(r'(?:</p>)?\s*<p[^>]*>')
+BREAK_TAG_RE = re.compile(r'<br[^>]*>')
+
+def plaintext(text: str) -> str:
+    paras = PARA_TAG_RE.split(text)
+    paras = paras if paras[0] else paras[1:]
+    linebroken = BREAK_TAG_RE.sub('&#10;', '<br /><br />'.join(paras))
+    return do_striptags(linebroken)
