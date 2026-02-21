@@ -25,7 +25,7 @@ from markupsafe import Markup
 from typing_extensions import Concatenate
 
 from .data import AutoDate, Data
-from .markdown import MarkdownParser
+from .markdown import MarkdownParser, split_frontmatter
 from .path import (
     AnyDest,
     AnySource,
@@ -566,20 +566,10 @@ class MetaTransformer(TextTransformer):
         return self
 
     def transform_text(self, text: str) -> str:
-        frontmatter, content = self.split_frontmatter(text)
+        frontmatter, content = split_frontmatter(text)
         metadata = parse_yaml_dict(frontmatter) if frontmatter else {}
         self.metadata.update(merge_dicts(self.metadata, metadata))
         return content
-
-    @staticmethod
-    def split_frontmatter(text: str) -> tuple[str | None, str]:
-        """Split a file into the frontmatter and text file components"""
-        if not text.startswith("---\n"):
-            return None, text
-        end = text.find("\n---\n", 3)
-        frontmatter = text[4:end]
-        text = text[end + 5:]
-        return frontmatter, text
 
 
 class MetaProcessorTransformer(TextTransformer):

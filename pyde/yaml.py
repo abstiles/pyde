@@ -11,11 +11,6 @@ except ImportError:
     from yaml import SafeLoader as Loader  # type: ignore
 
 
-YamlType: TypeAlias = (
-    str | int | float | bool | datetime | list['YamlType'] | dict[str, 'YamlType']
-)
-
-
 class AutoDate:
     def __init__(self, when: str | AutoDate, /):
         if isinstance(when, AutoDate):
@@ -90,14 +85,20 @@ class AutoDate:
         return date(year, month, day)
 
 
-def parse_yaml_dict(yaml_str: str) -> Mapping[str, YamlType | AutoDate]:
+YamlType: TypeAlias = (
+    str | int | float | bool | datetime | AutoDate
+    | list['YamlType'] | dict[str, 'YamlType']
+)
+
+
+def parse_yaml_dict(yaml_str: str) -> Mapping[str, YamlType]:
     yaml_dict = yaml.load(yaml_str, Loader=Loader)
     if not isinstance(yaml_dict, Mapping):
         return {}
     return _transform_types(cast(dict[str, YamlType], yaml_dict))
 
 
-def _transform_types(data: dict[str, YamlType]) -> dict[str, YamlType | AutoDate]:
+def _transform_types(data: dict[str, YamlType]) -> dict[str, YamlType]:
     dates_fixed = (
         (key, (AutoDate(val.isoformat()) if isinstance(val, (datetime, date)) else val))
         for key, val in data.items()

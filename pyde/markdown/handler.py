@@ -304,3 +304,13 @@ class HTMLCleaner(HTMLParser):
         for chunk in data:
             self._result.write(chunk)
         return self
+
+
+def split_frontmatter(text: str) -> tuple[str | None, str]:
+    """Split a file into the frontmatter and text file components"""
+    if not text.startswith("---\n"):
+        return None, text
+    end = text.find("\n---\n", 3)
+    frontmatter = text[4:end]
+    text = text[end + 5:]
+    return frontmatter, text

@@ -620,7 +620,7 @@ def default(x: T | Undefined, default: T) -> T:
 def absolute_url(context: Context, path: str) -> UrlPath:
     url = context.resolve('page').url
     if not url:
-        print(f'Unable to resolve url in context: {context.name}', file=sys.stderr)
+        print(f'Unable to resolve url for {path} in context: {context}', file=sys.stderr)
         return context.environment.undefined('url')
     page_url = UrlPath(str(url))
     try:

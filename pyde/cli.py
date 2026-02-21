@@ -5,12 +5,15 @@ CLI interface to pyde
 import argparse
 import sys
 import os
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
-from typing import cast
+from typing import cast, Mapping
 
 from pyde.environment import Environment as Pyde
+from pyde.markdown import split_frontmatter
 from pyde.utils import slugify
+from pyde.yaml import YamlType, parse_yaml_dict
 
 from .config import Config
 
@@ -72,6 +75,16 @@ def main() -> int:
         '--no-edit', dest='edit', action='store_false',
         help='Do not launch $EDITOR',
     )
+    draft_cmd_parser.add_argument(
+        '--list', action='store_true',
+        help='List all drafts',
+    )
+
+    drafts_cmd_parser = subparsers.add_parser(
+        'drafts', parents=[config_settings],
+        help='List all drafts',
+    )
+    drafts_cmd_parser.set_defaults(func=list_drafts)
 
     opts = parser.parse_args(args)
     status = opts.func(opts)
@@ -96,6 +109,8 @@ def watch(opts: argparse.Namespace) -> int:
 
 
 def draft(opts: argparse.Namespace) -> int:
+    if opts.list:
+        return list_drafts(opts)
     config = get_config(opts)
     config.drafts_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -113,6 +128,20 @@ def draft(opts: argparse.Namespace) -> int:
         editor = os.environ.get('EDITOR', 'vim')
         os.execlp(editor, editor, str(draft_file))
     return 0
+
+
+def list_drafts(opts: argparse.Namespace) -> int:
+    config = get_config(opts)
+    get_drafts(config.drafts_dir)
+    return 0
+
+
+def get_drafts(dir: Path) -> Iterable[tuple[Path, Mapping[str, YamlType]]]:
+    draft_files = dir.glob('*.md')
+    for path in draft_files:
+        frontmatter = split_frontmatter(path.read_text())[0]
+        if frontmatter is not None:
+            yield path, parse_yaml_dict(frontmatter)
 
 
 def get_config(opts: argparse.Namespace, raw: bool=False) -> Config:

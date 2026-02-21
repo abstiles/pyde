@@ -1,3 +1,3 @@
-from .handler import MarkdownConfig, MarkdownParser
+from .handler import MarkdownConfig, MarkdownParser, split_frontmatter
 
-__all__= ['MarkdownParser', 'MarkdownConfig']
+__all__= ['MarkdownParser', 'MarkdownConfig', 'split_frontmatter']
