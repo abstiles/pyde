@@ -359,7 +359,7 @@ class JekyllTranslator(Extension):
                     yield tok(block_begin='{%')
 
                 # Emit the include statement
-                path = self.environment.pyde_includes_dir / include
+                path = self.environment.pyde_includes_dir / include  # type: ignore
                 yield from tokenize(f'include "{path}" %}}')
                 state = None
                 if assignments:
@@ -382,8 +382,8 @@ class JekyllTranslator(Extension):
                     yield from tokenize(f'set {block} = namespace() %}}{{%')
                     yield tok()
             elif (token.type, token.value) == ("name", "endfor"):
+                # Potentially emit this for debugging
                 block, *vars = block_stack.pop()
-                vars = set(vars)
                 with parse_state('block'):
                     yield tok()
                     yield tok(stream.expect(lexer.TOKEN_BLOCK_END))
@@ -619,7 +619,7 @@ def default(x: T | Undefined, default: T) -> T:
 
 
 @pass_context
-def absolute_url(context: Context, path: str) -> UrlPath:
+def absolute_url(context: Context, path: str) -> UrlPath | Undefined:
     url = context.resolve('page').url
     if not url:
         print(f'Unable to resolve url for {path} in context: {context}', file=sys.stderr)

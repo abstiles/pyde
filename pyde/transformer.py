@@ -505,7 +505,9 @@ class CopyTransformer(BaseTransformer):
         }
 
         try:
-            result = format_permalink(self._permalink, {**self.metadata, **path_components})
+            result = format_permalink(
+                self._permalink, {**self.metadata, **path_components}
+            )
             if as_filename:
                 if not result.endswith(path.suffix):
                     result += path.suffix

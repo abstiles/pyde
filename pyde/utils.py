@@ -485,7 +485,7 @@ class NullMapping(Mapping[Any, Any]):
 TO_FORMAT_STR_RE = re.compile(r':(\w+)')
 def format_permalink(
     permalink: str,
-    values: Mapping[str, str]=NullMapping(),
+    values: Mapping[str, object]=NullMapping(),
     **kwargs: str,
 ) -> str:
     fmt = TO_FORMAT_STR_RE.sub('{\\1}', permalink)
