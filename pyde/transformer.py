@@ -38,7 +38,7 @@ from .path import (
     dest,
     source,
 )
-from .utils import Maybe, ilen, merge_dicts, format_permalink
+from .utils import Maybe, ilen, merge_dicts, format_permalink, slugify
 from .yaml import parse_yaml_dict
 
 DEFAULT_PERMALINK = '/:path/:name'
@@ -505,8 +505,14 @@ class CopyTransformer(BaseTransformer):
         }
 
         try:
+            title = self.metadata.get('title', path.stem)
             result = format_permalink(
-                self._permalink, {**self.metadata, **path_components}
+                self._permalink, {
+                    'title': title,
+                    'slug': slugify(title),
+                    **self.metadata,
+                    **path_components
+                }
             )
             if as_filename:
                 if not result.endswith(path.suffix):
