@@ -165,10 +165,9 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
 
     @property
     def parents(self) -> Sequence[UrlPath]:
-        parents = str(self._path.parent)
         return [
-            self._updated(path=UrlStr(parent)).as_dir()
-            for parent in parents
+            self._updated(path=UrlStr(str(parent))).as_dir()
+            for parent in self._path.parents
         ]
 
     def __rtruediv__(self, parent: PathType) -> UrlPath:
@@ -202,6 +201,10 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
         if path == self.path:
             return self
         return self._updated(path=path)
+
+    @property
+    def is_absolute(self) -> bool:
+        return self.absolute() is self
 
     @property
     def is_dir(self) -> bool:
@@ -246,7 +249,10 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
     def _unquote(path_part: UrlQuoted) -> str:
         return urllib.parse.unquote(path_part)
 
-    def __and__(self, param: str | tuple[str, Any] | Mapping[str, Any]) -> UrlPath:
+    def __and__(
+        self,
+        param: str | tuple[str, Any] | Mapping[str, Any] | Iterable[tuple[str, Any]]
+    ) -> UrlPath:
         def split_assign(assign: str) -> tuple[str, str]:
             name, value = assign.partition('=')[::2]
             return name, value
@@ -256,9 +262,9 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
             params = param.split('&')
             pairs = (split_assign(param) for param in params)
             return self.query.with_added(pairs)
-        if len(param) > 1 and isinstance(param[0], str):
-            return self.query.with_added([param])
-        return self.query.with_added(param)
+        if isinstance(param, Sequence) and len(param) > 1 and isinstance(param[0], str):
+            return self.query.with_added([cast(QueryMap.Pair, param)])
+        return self.query.with_added(cast(Iterable[QueryMap.Pair], param))
 
     def __xor__(self, param: str) -> UrlPath:
         return self.query.with_removed(param)
@@ -266,12 +272,11 @@ class UrlPath(FilePath):  # pylint: disable=too-many-public-methods
     def relative_to(self, *other: PydePath) -> UrlPath:
         try:
             path = UrlPath(other[0])
-        except KeyError:
+        except IndexError:
             raise TypeError('need at least one argument') from None
         for segment in other[1:]:
             path = path / segment
-        path_dir = UrlPath(path).dir
-        new_path = str(self._path.relative_to(path_dir.path))
+        new_path = str(self._path.relative_to(path.path))
         return self._updated(path=UrlStr(new_path))
 
 

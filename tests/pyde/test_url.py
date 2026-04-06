@@ -133,3 +133,18 @@ def test_query_adds(url_path: Fixture[UrlPath], params, expected) -> None:
 )
 def test_quoting(url_path: Fixture[UrlPath], expected: str) -> None:
     assert str(url_path) == expected
+
+
+@parametrize(
+    ('/path/to/something.txt', ['/path/to/', '/path/', '/']),
+    ('path/to/something.txt', ['path/to/', 'path/', './']),
+)
+def test_parents(url_path: Fixture[UrlPath], expected: list[UrlPath]) -> None:
+    assert list(url_path.parents) == list(map(UrlPath, expected))
+
+
+@parametrize(
+    ('/path', '/path/to/something.txt', 'to/something.txt'),
+)
+def test_relative_to(from_path: str, to_path: str, expected: str) -> None:
+    assert UrlPath(to_path).relative_to(UrlPath(from_path)) == UrlPath(expected)
