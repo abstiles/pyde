@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections import ChainMap
+from collections import ChainMap, OrderedDict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from itertools import chain, islice
@@ -163,6 +163,10 @@ class SiteFileManager(Iterable[SiteFile]):
             tag: [post.metadata for post in posts]
             for tag, posts in self._file_processor.tag.items()
         }
+
+    @property
+    def tree(self) -> 'DirTree':
+        return DirTree(self)
 
     def __iter__(self) -> Iterator[SiteFile]:
         type_ordering: Iterable[SiteFileType] = ('post', 'page', 'raw', 'meta')
@@ -430,3 +434,115 @@ class NullPaginator(Paginator):
 
     def paginate(self, *_: Any, **__: Any) -> Iterable[SiteFile]:
         return []
+
+
+@dataclass
+class DirTreeEntry:
+    dirtree: 'DirTree'
+    pre_children: bool = False
+    post_children: bool = False
+
+    @classmethod
+    def pre(cls, dirtree: 'DirTree') -> 'DirTreeEntry':
+        return cls(dirtree, pre_children=True)
+
+    @classmethod
+    def post(cls, dirtree: 'DirTree') -> 'DirTreeEntry':
+        return cls(dirtree, post_children=True)
+
+    @property
+    def path(self) -> UrlPath:
+        return self.dirtree.path
+
+    @property
+    def tree(self) -> dict[str, 'DirTree']:
+        return self.dirtree.tree
+
+    @property
+    def contents(self) -> dict[str, SiteFile]:
+        return self.dirtree.contents
+
+
+class DirTree:
+    def __init__(
+        self,
+        files: Iterable[SiteFile] = (),
+        name: str = '/',
+        parent: 'DirTree | None' = None,
+    ):
+        self.name = name
+        self.parent = parent
+        self.tree: dict[str, DirTree] = OrderedDict()
+        self.contents: dict[str, SiteFile] = OrderedDict()
+        for file in files:
+            self._add_file(file)
+        self._sort()
+
+    @property
+    def path(self) -> UrlPath:
+        if not self.parent:
+            return UrlPath(self.name)
+        return self.parent.path / self.name
+
+    def _next_part(self, path: UrlPath) -> str:
+        relative = path.relative_to(self.path)
+        print(f'path: {path!r}.relative_to({self.path!r}): {relative!r}')
+        try:
+            return [path.name for path in relative.parents][-2]
+        except IndexError:
+            pass
+        return ''
+
+    def _sort(self) -> 'DirTree':
+        self.tree = OrderedDict(self.tree.items())
+        self.contents = OrderedDict(self.contents.items())
+        return self
+
+    def _add_file(self, file: SiteFile) -> 'DirTree':
+        if part := self._next_part(file.path):
+            self.tree.setdefault(part, DirTree(name=part, parent=self)).add_file(file)
+            return self
+        self.contents[file.path.name] = file
+        return self
+
+    def add_file(self, file: SiteFile) -> 'DirTree':
+        return self._add_file(file)._sort()
+
+    def __getitem__(self, key: str | UrlPath) -> 'SiteFile | DirTree':
+        path = key if isinstance(key, UrlPath) else UrlPath(key)
+        try:
+            if part := self._next_part(path):
+                return self.tree[part][path]
+            try:
+                return self.tree[path.name]
+            except KeyError:
+                pass
+            return self.contents[path.name]
+        except KeyError:
+            raise KeyError(key) from None
+
+    @property
+    def children(self) -> Iterable['SiteFile | DirTree']:
+        yield from self.tree.values()
+        yield from self.contents.values()
+
+    @property
+    def metadata(self) -> Data:
+        return Data(
+            dirs=list(self.tree.keys()),
+            files=list(self.contents.keys()),
+            is_dir=True,
+        )
+
+    def walk(self) -> Iterable[Any]:
+        yield DirTreeEntry.pre(self)
+        for tree in self.tree.values():
+            yield from tree.walk()
+        yield DirTreeEntry.post(self)
+
+    def __repr__(self) -> str:
+        contents = ', '.join(
+            [f'{key!r}: {val!r}' for key, val in self.tree.items()]
+            + [repr(filename) for filename in self.contents]
+        )
+        return f'DirTree({contents})'

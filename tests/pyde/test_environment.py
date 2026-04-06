@@ -206,3 +206,8 @@ def test_tags(
     assert set(
         str(post['file']) for post in env.site.tags[tag]
     ) == posts
+
+
+def test_site_tree() -> None:
+    tree = get_env(drafts=True).site.tree
+    assert tree['/posts/post'].metadata.title == 'Some Post'
