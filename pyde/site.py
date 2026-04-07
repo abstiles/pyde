@@ -486,7 +486,6 @@ class DirTree:
 
     def _next_part(self, path: UrlPath) -> str:
         relative = path.relative_to(self.path)
-        print(f'path: {path!r}.relative_to({self.path!r}): {relative!r}')
         try:
             return [path.name for path in relative.parents][-2]
         except IndexError:
