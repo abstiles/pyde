@@ -339,6 +339,8 @@ class Environment:
             pass
 
     def _collection_paginator(self) -> Paginator:
+        if not self.config.paginate:
+            return NullPaginator()
         pagination = self.config.paginate
         template = self.template_manager.get_template(f'{pagination.template}.html')
         return Paginator(
