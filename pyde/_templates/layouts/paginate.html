@@ -1,0 +1,35 @@
+{% extends 'default.html' %}
+{%- set navlinks %}
+<ul class="links">
+	{%- if page.num > 1 %}
+	<li class="pagestart"><a href="{{ page.collection.start.path }}">Newest</a></li>
+	{%- endif %}
+	{%- if page.collection.previous %}
+	<li class="pageprev"><a href="{{ page.collection.previous.path }}">Previous</a></li>
+	{%- endif %}
+	{%- if page.collection.next %}
+	<li class="pagenext"><a href="{{ page.collection.next.path }}">Next</a></li>
+	{%- endif %}
+	{%- if page.num < page.collection.total_pages %}
+	<li class="pagelast"><a href="{{ page.collection.end.path }}">Oldest</a></li>
+	{%- endif %}
+</ul>
+{%- endset %}
+{%- block main %}
+{{- super() }}
+<nav class="top">
+	{{ navlinks | indent(width='\t') }}
+</nav>
+{{ content }}
+<div id="post-excerpts">
+{%- from 'post-preview.html' import preview as post_preview %}
+{%- for post in page.collection %}
+	{% filter indent(width='\t') %}
+		{{- post_preview(post) }}
+	{%- endfilter %}
+{%- endfor %}
+</div>
+<nav class="bottom">
+	{{ navlinks | indent(width='\t') }}
+</nav>
+{%- endblock %}

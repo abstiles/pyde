@@ -211,3 +211,8 @@ def test_tags(
 def test_site_tree() -> None:
     tree = get_env(drafts=True).site.tree
     assert tree['/posts/post'].metadata.title == 'Some Post'
+
+
+def test_missing_paginate() -> None:
+    env = get_env(paginate={})
+    env.build()

@@ -1,0 +1,9 @@
+{% macro preview(post) -%}
+<div class="post-preview">
+	<h3><a href="{{ post.path }}">{{ post.title }}</a></h3>
+	{% filter indent(width='\t') %}
+		{{- post.excerpt }}
+	{%- endfilter %}
+</div>
+{%- endmacro %}
+

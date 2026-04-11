@@ -23,7 +23,7 @@ from .markdown.handler import MarkdownParser
 from .path import FilePath, LocalPath
 from .plugins import PluginManager
 from .site import NullPaginator, Paginator, SiteFile, SiteFileManager
-from .templates import TemplateManager
+from .templates import Template, TemplateManager
 from .transformer import (
     CopyTransformer,
     MarkdownTransformer,
@@ -329,8 +329,7 @@ class Environment:
                 source, self.root, self.output_dir
             )
             layout = tf.metadata.get('layout', values['layout'])
-            template_name = f'{layout}{tf.outputs.suffix}'
-            template = self.template_manager.get_template(template_name)
+            template = self._get_layout(f'{layout}{tf.outputs.suffix}')
 
             self._site.append(tf.pipe(template=template))
         except FileNotFoundError:
@@ -338,11 +337,14 @@ class Environment:
             # should just move on without making a fuss.
             pass
 
+    def _get_layout(self, layout_name: str) -> Template:
+        return self.template_manager.get_template(self.layouts_dir / layout_name)
+
     def _collection_paginator(self) -> Paginator:
         if not self.config.paginate:
             return NullPaginator()
         pagination = self.config.paginate
-        template = self.template_manager.get_template(f'{pagination.template}.html')
+        template = self._get_layout(f'{pagination.template}.html')
         return Paginator(
             template, pagination.permalink, self.root, self.output_dir,
             maximum=pagination.size,
@@ -352,7 +354,7 @@ class Environment:
         if not self.config.tags.enabled:
             return NullPaginator()
         tag_spec = self.config.tags
-        template = self.template_manager.get_template(f'{tag_spec.template}.html')
+        template = self._get_layout(f'{tag_spec.template}.html')
         return Paginator(
             template, tag_spec.permalink, self.root, self.output_dir,
             minimum=tag_spec.minimum if tag_spec.enabled else -1,

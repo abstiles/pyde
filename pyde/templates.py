@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence, Siz
 from contextlib import contextmanager
 from datetime import date as date_only
 from datetime import datetime
+from importlib import resources
 from operator import attrgetter, itemgetter
 from pathlib import Path
 from typing import Any, Literal, Self, TypeVar, cast, overload
@@ -15,7 +16,7 @@ import jinja2
 from jinja2 import (
     BaseLoader,
     Environment,
-    Template,
+    Template as Template,
     lexer,
     pass_context,
     pass_environment,
@@ -29,6 +30,7 @@ from jinja2.utils import Namespace
 
 from pyde.markdown.handler import MarkdownParser
 
+from . import _templates
 from .data import AutoDate
 from .path import AnyRealPath, ReadablePath, UrlPath
 from .utils import first as ifirst
@@ -132,25 +134,30 @@ class TemplateLoader(BaseLoader):
     def __init__(self, templates_dir: AnyRealPath, includes_dir: AnyRealPath):
         self.templates_dir = templates_dir
         self.includes_dir = includes_dir
+        builtin_defaults = resources.files(_templates)
+        self.builtin_includes_dir = Path(str(builtin_defaults / 'includes'))
+        self.builtin_layouts_dir = Path(str(builtin_defaults / 'layouts'))
 
     def get_source(
         self, environment: Environment, template: str
     ) -> tuple[str, str | None, Callable[[], bool] | None]:
-        path: AnyRealPath
-        if template.startswith(str(self.includes_dir)):
-            path = Path(template)
-            if not path.is_file():
-                include_name = path.relative_to(str(self.includes_dir))
-                raise ValueError('Cannot find template {include_name} to include')
-        elif (path_by_name := self.templates_dir / template).is_file():
-            path = path_by_name
-        elif (exact_path := Path(template)).is_file():
-            path = exact_path
-        else:
-            return '{{ content }}', "", lambda: True
-        mtime = path.stat().st_mtime
-        source = path.read_text('utf8')
-        return source, str(path), lambda: mtime == path.stat().st_mtime
+        path = Path(template)
+        search_paths: list[AnyRealPath] = [path]
+        if template.startswith(str(self.templates_dir)):
+            relative_path = path.relative_to(str(self.templates_dir))
+            search_paths.append(self.builtin_layouts_dir / relative_path)
+        if not path.is_absolute():
+            search_paths.append(self.includes_dir / path)
+            search_paths.append(self.templates_dir / path)
+            search_paths.append(self.builtin_includes_dir / path)
+            search_paths.append(self.builtin_layouts_dir / path)
+        for source in search_paths:
+            if source.is_file():
+                mtime = source.stat().st_mtime
+                contents = source.read_text('utf8')
+                return contents, str(source), lambda: mtime == source.stat().st_mtime
+        raise ValueError(f'Cannot find template {template}')
+        return '{{ content }}', "raw", lambda: True
 
 
 UNDEFINED_FIELDS = ('hint', 'obj', 'name', 'exception')

@@ -9,14 +9,18 @@
 	</head>
 	<body>
 		<header>
-			{%- block header %}
+			{% filter indent(width='\t\t\t') %}
+			{%- block header -%}
 			<a id="header-site-root-link" href="{{ site.url }}">{{ site.name }}</a>
 			{%- endblock %}
+			{%- endfilter %}
 		</header>
 		<main>
+			{% filter indent(width='\t\t\t') %}
 			{%- block main %}
-			{{ content }}
+			{{- content }}
 			{%- endblock %}
+			{%- endfilter %}
 		</main>
 		{%- set footer_contents %}{% block footer %}{% endblock %}{% endset %}
 		{%- if footer_contents %}
